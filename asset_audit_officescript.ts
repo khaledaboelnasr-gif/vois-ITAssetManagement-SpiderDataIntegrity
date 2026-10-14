@@ -51,6 +51,7 @@ function runAudit(workbook: ExcelScript.Workbook, auditDate?: string, previousDa
   marketFilter?: string, focus?: string, shareSafe?: boolean, mappingsJson?: string, usersJson?: string,
   devicesJson?: string, poJson?: string, previousSnapshot?: string, returnSnapshot?: boolean): AuditResult {
   CLOCK.start = 0;
+  clearMemo();
   progress("Started (script " + SCRIPT_VERSION + ")");
   const asOf = (auditDate ? parseDate(auditDate) : null) || utcToday();
   const period = monthOf(asOf);
@@ -220,7 +221,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.14.7";
+const SCRIPT_VERSION = "2026.10.14.8";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -938,12 +939,39 @@ function blankAsset(): Asset {
   };
 }
 // Status, type, market and the other derived fields, from the raw values
+// An export repeats the same few statuses, types, companies and makes on every row, so each distinct value is
+// worked out once and remembered (this keeps 100,000+ rows fast)
+const MEMO = {
+  status: new Map<string, { label: string; standard: boolean; stage: string }>(),
+  type: new Map<string, { label: string; group: string; kind: string }>(),
+  market: new Map<string, string>(),
+  make: new Map<string, string>(),
+  date: new Map<string, Date | null>()
+};
+function clearMemo(): void {
+  MEMO.status.clear(); MEMO.type.clear(); MEMO.market.clear(); MEMO.make.clear(); MEMO.date.clear();
+}
+function memoDate(v: Raw): Date | null {
+  if (typeof v !== "string") { return parseDate(v); }
+  if (MEMO.date.has(v)) { return MEMO.date.get(v) || null; }
+  const d = parseDate(v);
+  if (MEMO.date.size < 50000) { MEMO.date.set(v, d); }
+  return d;
+}
 function classify(a: Asset, maps: Mappings): void {
-  const st = statusOf(a.statusRaw, maps), ty = typeOf(a.clsRaw, a.model, maps);
+  let st = MEMO.status.get(a.statusRaw);
+  if (!st) { st = statusOf(a.statusRaw, maps); MEMO.status.set(a.statusRaw, st); }
+  const tk = a.clsRaw + "\u0001" + a.model;
+  let ty = MEMO.type.get(tk);
+  if (!ty) { ty = typeOf(a.clsRaw, a.model, maps); MEMO.type.set(tk, ty); }
   a.status = st.label; a.standardStatus = st.standard; a.stage = st.stage;
   a.assetClass = ty.label; a.group = ty.group; a.kind = ty.kind;
-  a.market = marketOf(a.company, maps);
-  a.make = makeOf(a.makeRaw);
+  let market = MEMO.market.get(a.company);
+  if (market === undefined) { market = marketOf(a.company, maps); MEMO.market.set(a.company, market); }
+  a.market = market;
+  let make = MEMO.make.get(a.makeRaw);
+  if (make === undefined) { make = makeOf(a.makeRaw); MEMO.make.set(a.makeRaw, make); }
+  a.make = make;
   a.serialN = isPlaceholder(a.serial) ? "" : serialKey(a.serial);
   a.hostN = isPlaceholder(a.hostname) ? "" : hostKey(a.hostname);
   a.macN = a.mac.toUpperCase().replace(/[^0-9A-F]/g, "").replace(/^0+$/, "");
@@ -998,7 +1026,9 @@ function loadAssets(wb: ExcelScript.Workbook, sheets: string[], maps: Mappings):
     const get = (r: Raw[], f: string) => { const v = at(r, f); return String(v === undefined || v === null ? "" : v).trim(); };
     const num = (r: Raw[], f: string): Cell => { const v = at(r, f); return typeof v === "number" ? v : get(r, f) && isFinite(Number(get(r, f))) ? Number(get(r, f)) : ""; };
     const seenHere = new Set<string>();
+    progress(`'${sheetName}': building the asset records`);
     for (let i = 0; i < values.length; i++) {
+      if (i > 0 && i % 20000 === 0) { progress(`'${sheetName}': building records ${i.toLocaleString("en-US")} of ${values.length.toLocaleString("en-US")}`); }
       const r = values[i];
       if (!r.some(v => String(v).trim())) { continue; }
       out.rows++;
@@ -1019,13 +1049,14 @@ function loadAssets(wb: ExcelScript.Workbook, sheets: string[], maps: Mappings):
       a.scanAge = num(r, "scanAge"); a.createdAge = num(r, "createdAge");
       const costText = get(r, "cost").replace(/[^0-9.\-]/g, "");
       a.cost = costText ? Number(costText) || 0 : 0;
-      a.purchase = parseDate(at(r, "purchase")); a.warranty = parseDate(at(r, "warranty")); a.verified = parseDate(at(r, "verified"));
-      a.lastSeen = parseDate(at(r, "lastSeen")); a.statusDate = parseDate(at(r, "statusDate")); a.deployDate = parseDate(at(r, "deployDate"));
-      a.created = parseDate(at(r, "created")); a.updated = parseDate(at(r, "updated"));
+      a.purchase = memoDate(at(r, "purchase")); a.warranty = memoDate(at(r, "warranty")); a.verified = memoDate(at(r, "verified"));
+      a.lastSeen = memoDate(at(r, "lastSeen")); a.statusDate = memoDate(at(r, "statusDate")); a.deployDate = memoDate(at(r, "deployDate"));
+      a.created = memoDate(at(r, "created")); a.updated = memoDate(at(r, "updated"));
       // A date column with text that is not a date is an invalid date, not a missing one
       DATE_FIELDS.forEach(f => {
+        const v = at(r, f);
         const t = get(r, f);
-        if (t && !isPlaceholder(t) && !parseDate(at(r, f))) { a.badDates.push(`${FIELD_LABEL[f]} '${short(t, 20)}' is not a date`); }
+        if (t && !memoDate(v) && !isPlaceholder(t)) { a.badDates.push(`${FIELD_LABEL[f]} '${short(t, 20)}' is not a date`); }
       });
       if (BLANK_USER.test(norm(a.user)) && !a.email && !a.empId) { a.user = ""; }
       if (isPlaceholder(a.email)) { a.email = ""; }
@@ -1034,6 +1065,7 @@ function loadAssets(wb: ExcelScript.Workbook, sheets: string[], maps: Mappings):
       out.assets.push(a);
     }
     seenHere.forEach(s => seenEarlier.add(s));
+    progress(`'${sheetName}': ${values.length.toLocaleString("en-US")} records built`);
   });
   const ids = countBy(out.assets.filter(a => a.assetId).map(a => idKey(a.assetId)));
   out.unique = ids.size;
