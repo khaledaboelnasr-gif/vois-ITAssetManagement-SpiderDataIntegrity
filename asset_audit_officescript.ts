@@ -225,7 +225,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.14.10";
+const SCRIPT_VERSION = "2026.10.14.11";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -1709,32 +1709,32 @@ function monthlyReport(ctx: Ctx): MonthlyReport {
   line("");
   line("Best regards,");
 
-  // Copilot in PowerPoint: one slide per section, numbers given exactly, the open VOIS template's look
+  // Copilot in PowerPoint: 3 slides at most, numbers given exactly, the open VOIS template's look
   const ppt: string[] = [];
   const top = (m: Map<string, number>, n: number) => keysByCount(m).slice(0, n).map(k => `${k} ${fmtNum(m.get(k) || 0)}`).join(", ");
-  ppt.push(`Create a presentation titled VCAMS Monthly Asset Reconciliation - ${curName}, using this VOIS template's slide layouts, ` +
-    "colours and fonts. Use only the numbers below, exactly as written. Do not add, round or estimate numbers. " +
-    "Max 4 short bullets per slide. Where a chart is asked for, add a simple bar or column chart with these values.");
-  ppt.push(`Slide 1, title: ${prevName} vs ${curName}.`);
-  ppt.push(`Slide 2, headline numbers as 4 large figures: ${prevName} ${fmtNum(rc.prevRows)} assets; ${curName} ${fmtNum(rc.curRows)} assets; ` +
-    `net movement ${signed(rc.curRows - rc.prevRows)}; ${fmtNum(rc.newAssets.length)} new, ${fmtNum(rc.removed.length)} removed, ` +
-    `${fmtNum(rc.operational.length)} scrapped or lost.`);
   const moved = flatten(groups.map(x => x.rows.filter(r => r[1] !== r[2]).map(r => `${r[0]}\u0001${r[2] - r[1]}`)))
-    .map(t => t.split("\u0001")).sort((a, b) => Math.abs(+b[1]) - Math.abs(+a[1])).slice(0, 5).map(t => `${t[0]} ${signed(+t[1])}`).join(", ");
-  ppt.push(`Slide 3, assets by value group, clustered column chart ${prevName} vs ${curName}: ` +
-    groups.map(x => `${x.g} ${fmtNum(x.p)} vs ${fmtNum(x.c)}`).join("; ") + `. Biggest changes: ${moved || "none"}.`);
-  ppt.push(`Slide 4, new assets ${fmtNum(rc.newAssets.length)}` + (rc.newAssets.length ? `, bar chart by type: ${top(countBy(rc.newAssets.map(a => a.assetClass)), 6)}. ` +
-    `By PO: ${byPo.size ? top(byPo, 4) : "none"}; blank PurchaseNo ${fmtNum(blankPo)}.` : "."));
-  ppt.push(`Slide 5, scrapped and lost ${fmtNum(rc.operational.length)} (Scrapped ${fmtNum(scrapped.length)}, Lost ${fmtNum(lost.length)})` +
-    (rc.operational.length ? `, bar chart by type: ${top(countBy(rc.operational.map(c => c.cur.assetClass)), 6)}` : "") +
-    `. Other status changes not counted here: ${fmtNum(rc.changes.length - rc.operational.length)}.`);
-  ppt.push(`Slide 6, serial number changes ${rc.serialChecked ? fmtNum(rc.serialChanges.length) + (rc.serialChanges.length ? " (" +
-    top(countBy(rc.serialChanges.map(c => c.change)), 3) + ")" : "") : "not checked"} and removed assets ${fmtNum(rc.removed.length)}` +
-    (rc.removed.length ? " (to be reviewed, not treated as scrapped)" : "") + ".");
-  ppt.push("Slide 7, PO validation table with columns PO, Model, In export, Supplied, Variance, Result: " + (po.length ? po.slice(0, 6).map(r =>
-    `${r[0] || "Blank PurchaseNo"}, ${model(r) || "-"}, ${fmtNum(r[2] as number)}, ${r[3] === "" ? "-" : fmtNum(r[3] as number)}, ${r[4] === "" ? "-" : signed(r[4] as number)}, ${r[7]}`).join("; ") +
-    (po.length > 6 ? `; and ${po.length - 6} more POs` : "") : "no new-asset POs") + ".");
-  ppt.push(`Slide 8, points for review: ${review.length ? review.slice(0, 4).join("; ") : "none"}.`);
+    .map(t => t.split("\u0001")).sort((a, b) => Math.abs(+b[1]) - Math.abs(+a[1])).slice(0, 4).map(t => `${t[0]} ${signed(+t[1])}`).join(", ");
+  const serialShort = (c: string) => c === SERIAL_CHANGED ? "changed" : c === SERIAL_ADDED ? "added" : "removed";
+  ppt.push(`Create exactly 3 slides titled VCAMS Monthly Asset Reconciliation - ${curName}, using this VOIS template's layouts, ` +
+    "colours and fonts. No title slide, no agenda, no closing slide. Use only the numbers below, exactly as written; do not add, " +
+    "round or estimate numbers. Keep text short: at most 4 bullets per slide. Add the charts asked for as simple bar or column charts.");
+  ppt.push(`Slide 1, Overview ${prevName} vs ${curName}: 3 large figures: ${prevName} ${fmtNum(rc.prevRows)} assets, ` +
+    `${curName} ${fmtNum(rc.curRows)} assets, net movement ${signed(rc.curRows - rc.prevRows)}. Clustered column chart by value group, ` +
+    `${prevName} vs ${curName}: ` + groups.map(x => `${x.g} ${fmtNum(x.p)} vs ${fmtNum(x.c)}`).join("; ") +
+    `. One line: biggest changes ${moved || "none"}.`);
+  ppt.push(`Slide 2, Movements this month: bar chart with New ${fmtNum(rc.newAssets.length)}, Removed ${fmtNum(rc.removed.length)}, ` +
+    `Scrapped ${fmtNum(scrapped.length)}, Lost ${fmtNum(lost.length)}` +
+    (rc.serialChecked ? `, Serial number changes ${fmtNum(rc.serialChanges.length)}` : "") + ". Bullets: " +
+    (rc.newAssets.length ? `new by type ${top(countBy(rc.newAssets.map(a => a.assetClass)), 3)}; by PO ${byPo.size ? top(byPo, 2) : "none"}, ` +
+      `blank PurchaseNo ${fmtNum(blankPo)}` : "no new assets") +
+    (rc.operational.length ? `; scrapped or lost by type ${top(countBy(rc.operational.map(c => c.cur.assetClass)), 3)}` : "") +
+    (rc.serialChecked && rc.serialChanges.length ? `; serials ${top(countBy(rc.serialChanges.map(c => serialShort(c.change))), 3)}` : "") +
+    (rc.removed.length ? "; removed assets are to be reviewed, not treated as scrapped" : "") + ".");
+  ppt.push("Slide 3, PO validation and points for review: a small table with columns PO, Model, In export, Supplied, Variance, Result: " +
+    (po.length ? po.slice(0, 4).map(r => `${r[0] || "Blank PurchaseNo"}, ${model(r) || "-"}, ${fmtNum(r[2] as number)}, ` +
+      `${r[3] === "" ? "-" : fmtNum(r[3] as number)}, ${r[4] === "" ? "-" : signed(r[4] as number)}, ${r[7]}`).join("; ") +
+      (po.length > 4 ? `; and ${po.length - 4} more POs in the workbook` : "") : "no new-asset POs") +
+    `. Then up to 3 bullets for review: ${review.length ? review.slice(0, 3).join("; ") : "none"}.`);
   return { subject, email, heads, ppt };
 }
 
@@ -2756,7 +2756,7 @@ function buildEmailSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
   const pptFirst = r + 2;
   r = block("Copilot in PowerPoint prompt", "Open a new presentation from the VOIS template, open Copilot, then select " +
     `B${pptFirst + 1}:B${pptFirst + rep.ppt.length}, copy and paste it as the prompt. ${prompt.length.toLocaleString("en-US")} characters` +
-    (prompt.length > COPILOT_PROMPT_LIMIT ? ` - longer than ${COPILOT_PROMPT_LIMIT.toLocaleString("en-US")}: if Copilot cuts it, paste slides 1-5 first, then ask it to add slides 6-8.` : "."),
+    (prompt.length > COPILOT_PROMPT_LIMIT ? ` - longer than ${COPILOT_PROMPT_LIMIT.toLocaleString("en-US")}: if Copilot cuts it, paste the first two rows, then ask it to add slide 3 with the last row.` : "."),
   rep.ppt, []);
 }
 const NEW_HEADER = ["Asset no.", "Serial no.", "Asset status", "Asset Type", "Model", "Purchase date", "PurchaseNo", "Last scan",

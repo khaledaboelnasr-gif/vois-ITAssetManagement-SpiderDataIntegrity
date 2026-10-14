@@ -1,5 +1,5 @@
 VOIS ASSET AUDIT SCRIPT - OVERVIEW
-Script version 2026.10.14.10
+Script version 2026.10.14.11
 ====================================================================
 
 Use this to review the script and ask for changes. To ask for a change,
@@ -47,7 +47,7 @@ name the tab and section, for example:
    - The monthly email, ready to copy into Outlook: subject and body. It holds only what the monthly email
      already had: totals, the summary by type, new and removed assets, serial number changes, Scrapped and
      Lost, PO validation, and points for review. No names or emails.
-   - A prompt to paste into Copilot in PowerPoint (opened from the VOIS template) that builds an 8-slide deck
+   - A prompt to paste into Copilot in PowerPoint (opened from the VOIS template) that builds a 3-slide deck
      with charts from the same numbers. Kept under 2,000 characters.
 
 2) EXECUTIVE SUMMARY
