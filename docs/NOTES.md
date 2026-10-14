@@ -61,6 +61,17 @@ The spec is the "Monthly Asset Reconciliation Copilot Agent" instructions, writt
 
 ## Key decisions
 
+- **Real export layout (2026-10-14 run).** The current Spider export has 22 columns in its own order (ID, Asset no.,
+  Asset Type, Model, Status, ..., Comment, Status comment, ..., Updated, Legal Entity); the previous one has the 13
+  standard headers. Both are matched by header name. `Updated` = AssetUpdateDate, `Asset Assignment Date` =
+  Deployment Date, `Status comment` / `Comment` feed the email's "Spider Comment".
+- **Inactive and Stolen** are VCAMS statuses (they are in the team's monthly email), so they are in the controlled
+  list (stages Inactive and Lost). Damaged and Delivered are still reported for review until confirmed.
+- **Monthly email** follows the team's sent email (2026-09-15) section by section. The script never writes the
+  investigation result: each listed asset ends with "[add validation note]".
+- **Formulas**: calculation is paused during the run and a full recalculation runs at the end, so Pivot & Summary
+  never shows 0 in the saved file.
+
 - **Asset no. is the only reconciliation key.** It is never matched by row, serial, model or PO. Trimmed and case-insensitive.
 - **Status stages.** Controlled statuses map to stages for the audit logic. The reports always show the VCAMS status.
 

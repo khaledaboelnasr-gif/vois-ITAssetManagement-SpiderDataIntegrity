@@ -45,6 +45,9 @@ function main(workbook: ExcelScript.Workbook, auditDate?: string, previousDate?:
     return runAudit(workbook, auditDate, previousDate, historyJson, marketFilter, focus, shareSafe, mappingsJson, usersJson, devicesJson, poJson, previousSnapshot, returnSnapshot);
   } finally {
     workbook.getApplication().setCalculationMode(calcMode);
+    // Work out the Pivot & Summary formulas now: otherwise the saved file can show 0 until Excel recalculates
+    progress("Calculating the summary formulas");
+    workbook.getApplication().calculate(ExcelScript.CalculationType.full);
   }
 }
 function runAudit(workbook: ExcelScript.Workbook, auditDate?: string, previousDate?: string, historyJson?: string,
@@ -107,6 +110,9 @@ function runAudit(workbook: ExcelScript.Workbook, auditDate?: string, previousDa
   if (prevAssets) {
     ctx.recon = reconcile(ctx, cur, prevLoad, prevAssets, assets, prevLoad ? "previous export tab " +
       roles.prev.map(n => `'${n}'`).join(", ") : "snapshot from the previous run", prevPeriod);
+    // The dates of the two exports, for the monthly email: given, else from the tab names
+    ctx.recon.prevDay = (previousDate ? parseDate(previousDate) : null) || (roles.prev.length ? tabDay(roles.prev[0]) : null);
+    ctx.recon.curDay = auditDate ? asOf : tabDay(roles.cur[0]);
   }
   progress("Comparison with the previous month done");
   ctx.deploySource = ctx.recon.available ? "status changes into In operation since the previous export (exact)" :
@@ -225,7 +231,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.14.11";
+const SCRIPT_VERSION = "2026.10.14.13";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -240,7 +246,7 @@ const STAGES = [IN_USE, STOCK, REPAIR, TRANSIT, INACTIVE, RETIRED, LOST, DISPOSE
 const VCAMS_STATUSES: [string, string][] = [
   ["In operation", IN_USE], ["In stock", STOCK], ["Ordered", TRANSIT], ["Reserved", STOCK], ["Ready for use", STOCK],
   ["To install", STOCK], ["Building", STOCK], ["Marketed", DISPOSED], ["Disabled", INACTIVE],
-  ["Authorised inactive", INACTIVE], ["Scrapped", DISPOSED], ["Lost", LOST]
+  ["Authorised inactive", INACTIVE], ["Scrapped", DISPOSED], ["Lost", LOST], ["Inactive", INACTIVE], ["Stolen", LOST]
 ];
 // Statuses with the same meaning written another way (compared without case, spaces or punctuation)
 const STATUS_SPELLINGS: Record<string, string> = { "authorizedinactive": "Authorised inactive", "inoperations": "In operation" };
@@ -436,7 +442,7 @@ const ASSET_COLS: Record<string, string[]> = {
   functionUnit: ["Function Unit", "Functional Unit", "FunctionUnit", "Function"],
   created: ["AssetCreationDate", "Asset Creation Date", "Creation Date", "Created Date", "Created On"],
   createdAge: ["Creation Age in Days", "Creation Age", "Age in Days"],
-  updated: ["AssetUpdateDate", "Asset Update Date", "Update Date", "Last Modified", "Modified Date", "Last Updated"],
+  updated: ["AssetUpdateDate", "Asset Update Date", "Update Date", "Last Modified", "Modified Date", "Last Updated", "Updated"],
   tag: ["Asset Tag", "Tag", "Tag Number", "Asset Label", "Barcode", "Label Number"],
   hostname: ["Hostname", "Host Name", "Device Name", "Computer Name", "Machine Name", "Network Name"],
   mac: ["MAC Address", "MAC", "Ethernet MAC", "WiFi MAC", "Wireless MAC"],
@@ -451,8 +457,10 @@ const ASSET_COLS: Record<string, string[]> = {
   warranty: ["Warranty End", "Warranty End Date", "Warranty Expiry", "Warranty Expiration Date", "Warranty Until", "Lease End", "Lease End Date", "Contract End"],
   verified: ["Last Audit Date", "Last Inventory Date", "Last Verified", "Last Verified Date", "Audit Date", "Inventory Date", "Last Physical Audit"],
   statusDate: ["Status Date", "Status Change Date", "Status Changed", "Last Status Change"],
-  deployDate: ["Deployment Date", "Deployed Date", "Assigned Date", "Assignment Date", "Issued Date", "Issue Date", "Allocation Date", "Handover Date"],
-  cost: ["Cost", "Purchase Price", "Price", "Purchase Cost", "Value", "Asset Value", "Net Book Value", "Book Value"]
+  deployDate: ["Deployment Date", "Deployed Date", "Assigned Date", "Assignment Date", "Issued Date", "Issue Date", "Allocation Date", "Handover Date", "Asset Assignment Date"],
+  cost: ["Cost", "Purchase Price", "Price", "Purchase Cost", "Value", "Asset Value", "Net Book Value", "Book Value"],
+  comment: ["Comment", "Comments", "Spider Comment", "Asset Comment", "Remarks", "Remark", "Notes", "Note"],
+  statusComment: ["Status comment", "Status Comments", "Status Remark", "Status Remarks", "Status Note"]
 };
 const ASSET_FIELDS = Object.keys(ASSET_COLS);
 // Needed to reconcile two exports: the run stops with a clear message when one is missing
@@ -463,7 +471,7 @@ const STANDARD_HEADER: Record<string, string> = {
   created: "AssetCreationDate", createdAge: "Creation Age in Days", updated: "AssetUpdateDate", tag: "Asset Tag",
   hostname: "Hostname", mac: "MAC Address", make: "Manufacturer", user: "Assigned To", email: "User Email",
   empId: "Employee ID", costCenter: "Cost Center", location: "Location", company: "Company / market", managedBy: "Managed By",
-  warranty: "Warranty End", verified: "Last Audit Date", statusDate: "Status Date", deployDate: "Deployment Date", cost: "Cost"
+  warranty: "Warranty End", verified: "Last Audit Date", statusDate: "Status Date", deployDate: "Deployment Date", cost: "Cost", comment: "Comment", statusComment: "Status comment"
 };
 const FIELD_LABEL = STANDARD_HEADER;
 const USER_COLS: Record<string, string[]> = {
@@ -546,7 +554,7 @@ interface Asset {
   hostname: string; hostN: string; mac: string; macN: string; clsRaw: string; assetClass: string; group: string; kind: string;
   makeRaw: string; make: string; model: string; statusRaw: string; status: string; standardStatus: boolean; stage: string;
   user: string; email: string; empId: string; costCenter: string; location: string; company: string; market: string;
-  managedBy: string; cost: number; po: string; functionUnit: string; scanAge: Cell; createdAge: Cell;
+  managedBy: string; cost: number; po: string; functionUnit: string; comment: string; statusComment: string; scanAge: Cell; createdAge: Cell;
   purchase: Date | null; warranty: Date | null; verified: Date | null; lastSeen: Date | null; statusDate: Date | null;
   deployDate: Date | null; created: Date | null; updated: Date | null; badDates: string[]; flags: Flag[];
   device: DeviceRef | null; prev: Asset | null; isNew: boolean; deployedNow: boolean;
@@ -578,7 +586,8 @@ interface PoData { source: string; rows: PoRow[]; problems: string[]; }
 interface StatusChange { cur: Asset; prev: Asset; transition: string; }
 interface SerialChange { cur: Asset; prev: Asset; change: string; }
 interface Recon {
-  available: boolean; source: string; prevPeriod: string; curPeriod: string; prevRows: number; curRows: number;
+  available: boolean; source: string; prevPeriod: string; curPeriod: string; prevDay: Date | null; curDay: Date | null;
+  prevRows: number; curRows: number;
   prevUnique: number; curUnique: number; prevBlank: number; curBlank: number; prevDup: string[]; curDup: string[];
   serialChanges: SerialChange[]; serialChecked: boolean;
   prevByType: Map<string, number>; curByType: Map<string, number>; newAssets: Asset[]; removed: Asset[]; existing: number;
@@ -912,6 +921,12 @@ function tabDate(name: string): Date | null {
   }
   return null;
 }
+// The day in a tab name ("10-14-2026 Export", "2026-10-14 Export"); null when the name has no day
+function tabDay(name: string): Date | null {
+  const m = name.match(/(\d{4})[-_. ](\d{1,2})[-_. ](\d{1,2})/);
+  if (m && +m[2] >= 1 && +m[2] <= 12) { return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])); }
+  return /(\d{1,2})[-_.](\d{1,2})[-_.](\d{4})/.test(name) ? tabDate(name) : null;
+}
 // The newest AssetUpdateDate (else creation date, else last scan) in a tab: the older export has older data
 function latestDate(wb: ExcelScript.Workbook, name: string, maps: Mappings): number {
   const ws = wb.getWorksheet(name);
@@ -957,7 +972,7 @@ function blankAsset(): Asset {
     key: "", sheet: "", row: 0, assetId: "", tag: "", serial: "", serialN: "", hostname: "", hostN: "", mac: "", macN: "",
     clsRaw: "", assetClass: "", group: UNLISTED, kind: OTHER, makeRaw: "", make: "", model: "", statusRaw: "", status: "",
     standardStatus: false, stage: UNKNOWN, user: "", email: "", empId: "", costCenter: "", location: "", company: "", market: "",
-    managedBy: "", cost: 0, po: "", functionUnit: "", scanAge: "", createdAge: "", purchase: null, warranty: null, verified: null,
+    managedBy: "", cost: 0, po: "", functionUnit: "", comment: "", statusComment: "", scanAge: "", createdAge: "", purchase: null, warranty: null, verified: null,
     lastSeen: null, statusDate: null, deployDate: null, created: null, updated: null, badDates: [], flags: [], device: null,
     prev: null, isNew: false, deployedNow: false
   };
@@ -1071,7 +1086,7 @@ function loadAssets(wb: ExcelScript.Workbook, sheets: string[], maps: Mappings):
       a.mac = get(r, "mac"); a.clsRaw = get(r, "cls"); a.model = get(r, "model"); a.statusRaw = get(r, "status");
       a.makeRaw = get(r, "make"); a.user = get(r, "user"); a.email = get(r, "email").toLowerCase(); a.empId = get(r, "empId");
       a.costCenter = get(r, "costCenter"); a.location = get(r, "location"); a.company = get(r, "company");
-      a.managedBy = get(r, "managedBy"); a.po = get(r, "po"); a.functionUnit = get(r, "functionUnit");
+      a.managedBy = get(r, "managedBy"); a.po = get(r, "po"); a.functionUnit = get(r, "functionUnit"); a.comment = get(r, "comment"); a.statusComment = get(r, "statusComment");
       a.scanAge = num(r, "scanAge"); a.createdAge = num(r, "createdAge");
       const costText = get(r, "cost").replace(/[^0-9.\-]/g, "");
       a.cost = costText ? Number(costText) || 0 : 0;
@@ -1374,6 +1389,7 @@ function applyShareSafe(ctx: Ctx): void {
     a.po = tok("po", a.po, n => `PO-${pad(n, 6)}`);
     a.functionUnit = tok("unit", a.functionUnit, n => `UNIT-${pad(n, 3)}`);
     a.location = tok("site", a.location, n => `SITE-${pad(n, 3)}`);
+    a.comment = ""; a.statusComment = "";  // free text can hold names
     a.costCenter = tok("cc", a.costCenter, n => `CC-${pad(n, 3)}`);
     a.managedBy = tok("team", a.managedBy, n => `TEAM-${pad(n, 3)}`);
     a.company = a.market;
@@ -1409,7 +1425,7 @@ const DUP_CODES: Record<string, string> = { "Asset no.": "DUP_ASSET_ID", "Serial
 
 // ============================================================================ monthly reconciliation
 function emptyRecon(): Recon {
-  return { available: false, source: "", prevPeriod: "", curPeriod: "", prevRows: 0, curRows: 0, prevUnique: 0, curUnique: 0,
+  return { available: false, source: "", prevPeriod: "", curPeriod: "", prevDay: null, curDay: null, prevRows: 0, curRows: 0, prevUnique: 0, curUnique: 0,
     prevBlank: 0, curBlank: 0, prevDup: [], curDup: [], serialChanges: [], serialChecked: false, prevByType: new Map<string, number>(), curByType: new Map<string, number>(),
     newAssets: [], removed: [], existing: 0, changes: [], operational: [], unknownStatuses: new Map<string, number>(),
     unlistedTypes: new Map<string, number>(), fromSnapshot: false };
@@ -1602,7 +1618,11 @@ function signed(n: number): string {
 // ============================================================================ monthly email and PowerPoint prompt
 // The monthly email holds only what the team already sends: totals, the summary by type, new / removed assets, serial
 // number changes, Scrapped / Lost, PO validation and the points to review. No names or emails.
-interface MonthlyReport { subject: string; email: string[]; heads: number[]; ppt: string[]; }
+interface MonthlyReport { subject: string; attachment: string; email: string[]; heads: number[]; ppt: string[]; }
+// Status-change and serial groups up to this size are listed asset by asset (larger ones as a count)
+const EMAIL_DETAIL_MAX = 10;
+// Where the team adds what the investigation found for each listed asset
+const EMAIL_NOTE = "[add validation note]";
 const COPILOT_PROMPT_LIMIT = 2000;
 function fmtNum(n: number): string {
   return n.toLocaleString("en-US");
@@ -1621,12 +1641,57 @@ function typeRows(rc: Recon, group: string, maps: Mappings): [string, number, nu
   }
   return types.map(t => [t, rc.prevByType.get(t) || 0, rc.curByType.get(t) || 0] as [string, number, number]);
 }
+// One line per PO for the email: what the PO contains (user-supplied), what is already on Spider (new assets with that
+// PO), and what is still pending. Supplied models are matched to asset types ("Bags" = Bag, "Mouses" / "Mice" = Mouse).
+// The Spider comments of an asset for the email: the status comment first, then the general comment if it differs
+function spiderComment(a: Asset): string {
+  const sc = a.statusComment.trim(), c = a.comment.trim();
+  return (sc ? ` - Spider Comment: ${short(sc, 200)}` : "") + (c && c !== sc ? ` - ${sc ? "Comment" : "Spider Comment"}: ${short(c, 200)}` : "");
+}
+function poLines(ctx: Ctx): string[] {
+  const rc = ctx.recon, out: string[] = [];
+  const typeKey = (model: string) => {
+    const k = compactKey(model), all = rc.newAssets.map(a => a.assetClass);
+    const hit = all.find(t => [k, k.replace(/s$/, ""), k.replace(/es$/, ""), k === "mice" ? "mouse" : ""].indexOf(compactKey(t)) >= 0);
+    return hit || "";
+  };
+  const ok = (v: string) => /^(yes|not applicable)$/i.test(v.trim());
+  const supplied = new Map<string, PoRow[]>();
+  ctx.po.rows.forEach(r => { const k = r.number.trim(); if (k) { supplied.set(k, (supplied.get(k) || []).concat([r])); } });
+  supplied.forEach((rows, po) => {
+    const onSpider = rc.newAssets.filter(a => a.po.trim() === po);
+    const added: string[] = [], pending: string[] = [], extra: string[] = [];
+    const matched = new Set<string>();
+    rows.forEach(r => {
+      const qty = typeof r.quantity === "number" ? r.quantity : 0, t = typeKey(r.model), label = (r.model || "items").toLowerCase();
+      const n = t ? onSpider.filter(a => a.assetClass === t).length : 0;
+      if (t) { matched.add(t); }
+      if (n >= qty && qty > 0) { added.push(`${fmtNum(qty)} ${label}`); if (n > qty) { extra.push(`${fmtNum(n - qty)} more ${label} on Spider than on the PO`); } }
+      else if (n > 0) { added.push(`${fmtNum(n)} of ${fmtNum(qty)} ${label}`); pending.push(`${fmtNum(qty - n)} ${label}`); }
+      else { pending.push(`${fmtNum(qty)} ${label}`); }
+    });
+    const other = onSpider.filter(a => !matched.has(a.assetClass));
+    if (other.length) { extra.push(`${fmtNum(other.length)} assets on Spider with this PO not in the supplied lines (${countText(countBy(other.map(a => a.assetClass)), 3)})`); }
+    let t = `PO: ${po} - ` + (added.length ? `Contains ${added.join(" and ")} which are already added` +
+      (pending.length ? `, however there are ${pending.join(" and ")} still pending to be added on Spider` : "") :
+      `Contains ${pending.join(" and ")}, all still pending to be added on Spider`) + ".";
+    if (extra.length) { t += " " + extra.join("; ") + "."; }
+    const open = rows.filter(r => !ok(r.physical) || !ok(r.spider));
+    if (open.length) { t += ` Validation: Physical Security ${Array.from(new Set<string>(open.map(r => r.physical || "blank"))).join(" / ")}, ` +
+      `Spider ${Array.from(new Set<string>(open.map(r => r.spider || "blank"))).join(" / ")}.`; }
+    out.push(t);
+  });
+  const unsupplied = countBy(rc.newAssets.filter(a => a.po.trim() && !supplied.has(a.po.trim())).map(a => a.po.trim()));
+  keysByCount(unsupplied).forEach(po => out.push(`PO: ${po} - ${fmtNum(unsupplied.get(po) || 0)} assets added on Spider (` +
+    countText(countBy(rc.newAssets.filter(a => a.po.trim() === po).map(a => a.assetClass)), 3) + "); no PO validation supplied."));
+  if (!out.length) { out.push("No POs to validate this month."); }
+  return out;
+}
 function monthlyReport(ctx: Ctx): MonthlyReport {
   const rc = ctx.recon, prevName = monthName(rc.prevPeriod), curName = monthName(rc.curPeriod);
   const email: string[] = [], heads: number[] = [];
   const head = (t: string) => { heads.push(email.length); email.push(t); };
   const line = (t: string) => email.push(t);
-  const change = (p: number, c: number) => `${fmtNum(p)} → ${fmtNum(c)} (${signed(c - p)})`;
   const scrapped = rc.operational.filter(c => compactKey(c.cur.status) === "scrapped");
   const lost = rc.operational.filter(c => compactKey(c.cur.status) === "lost");
   const blankPo = rc.newAssets.filter(a => !a.po).length;
@@ -1645,70 +1710,93 @@ function monthlyReport(ctx: Ctx): MonthlyReport {
   if (rc.prevBlank || rc.curBlank) { review.push(`Rows without an asset number: ${rc.prevBlank} last month, ${rc.curBlank} this month`); }
   if (rc.unknownStatuses.size) { review.push(`Statuses outside the standard list (both exports): ${countText(rc.unknownStatuses, 5)}`); }
   if (rc.unlistedTypes.size) { review.push(`Asset types outside the standard list (both exports): ${countText(rc.unlistedTypes, 5)}`); }
-  const subject = `VCAMS Monthly Asset Reconciliation - ${curName}`;
+  const subject = "Asset Governance Task - Spider Data Integrity";
+  const day = (d: Date | null) => d ? `${d.getUTCDate()} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getUTCMonth()]} ${d.getUTCFullYear()}` : "";
+  const plural = (t: string) => /s$|-/i.test(t) ? t : t + "s";
+  const typeCounts = (list: Asset[]) => keysByCount(countBy(list.map(a => a.assetClass)));
+  const L1 = "• ", L2 = "      o ", L3 = "            ▪ ", L4 = "                  • ";
 
-  line("Hello all,");
+  line("Hi All,");
   line("");
-  line(`Please find below the VCAMS monthly asset reconciliation for ${curName}, comparing the ${prevName} and ${curName} exports. ` +
-    "The detailed workbook is attached.");
+  line("Please find attached excel sheet and below findings from Spider extraction analysis from " +
+    (rc.prevDay && rc.curDay ? `${day(rc.prevDay)} to ${day(rc.curDay)}` : `${prevName} to ${curName}`) + ".");
   line("");
-  head("1. Overview");
-  line(`• ${prevName} assets: ${fmtNum(rc.prevRows)}`);
-  line(`• ${curName} assets: ${fmtNum(rc.curRows)}`);
-  line(`• Net movement: ${signed(rc.curRows - rc.prevRows)}`);
+  line("Excel sheet have pivot table and summary with all the details.");
   line("");
-  head(`2. Asset summary by type (${prevName} → ${curName})`);
-  groups.forEach(x => {
-    line(`${x.g} assets: ${change(x.p, x.c)}`);
-    x.rows.forEach(r => line(`   • ${r[0]}: ${change(r[1], r[2])}`));
+  head("1. Overall Summary");
+  line(`${L1}Previous-month total assets: ${fmtNum(rc.prevRows)}`);
+  line(`${L1}Current-month total assets: ${fmtNum(rc.curRows)}`);
+  const newTypes = typeCounts(rc.newAssets);
+  line(`${L1}New assets: ${fmtNum(rc.newAssets.length)}` + (rc.newAssets.length ? ` (${newTypes.length === 1 ? plural(newTypes[0]) :
+    countText(countBy(rc.newAssets.map(a => plural(a.assetClass))), 5)})` : ""));
+  if (rc.removed.length) { line(`${L1}Removed assets (in the previous extraction, not in the current one - to review): ${fmtNum(rc.removed.length)}`); }
+  line("");
+  head("2. New Assets Validation");
+  if (!rc.newAssets.length) { line(`${L1}No new assets`); }
+  newTypes.forEach(t => {
+    const list = rc.newAssets.filter(a => a.assetClass === t), byPoT = countBy(list.map(a => a.po));
+    line(`${L1}${plural(t)}: ${fmtNum(list.length)}`);
+    keysByCount(byPoT).filter(k => k).slice(0, 8).forEach(k => line(`${L2}${fmtNum(byPoT.get(k) || 0)} ${plural(t).toLowerCase()} with PO ${k}`));
+    if (byPoT.get("")) { line(`${L2}${fmtNum(byPoT.get("") || 0)} ${plural(t)} with Empty PO on Spider`); }
   });
-  line(`Grand total: ${change(rc.prevRows, rc.curRows)}`);
   line("");
-  head(`3. New assets: ${fmtNum(rc.newAssets.length)}`);
-  if (rc.newAssets.length) {
-    line(`• By type: ${countText(countBy(rc.newAssets.map(a => a.assetClass)), 10)}`);
-    line(`• By PO: ${byPo.size ? countText(byPo, 10) : "none"}`);
-    line(`• Blank PurchaseNo: ${fmtNum(blankPo)}`);
-  }
+  head("2.1. P.Os Validation");
+  poLines(ctx).forEach(t => line(`${L1}${t}`));
   line("");
-  head(`4. Removed assets: ${fmtNum(rc.removed.length)}`);
-  if (rc.removed.length) {
-    line(`• By type: ${countText(countBy(rc.removed.map(a => a.assetClass)), 10)}`);
-    line("• In last month's export but not in this month's. Each needs review; they are not treated as scrapped.");
-  }
-  line("");
-  if (rc.serialChecked) {
-    head(`5. Serial number changes: ${fmtNum(rc.serialChanges.length)}`);
-    if (rc.serialChanges.length) {
-      line(`• ${countText(countBy(rc.serialChanges.map(c => c.change)), 3)}`);
-      line(`• By type: ${countText(countBy(rc.serialChanges.map(c => c.cur.assetClass)), 10)}`);
-    }
+  head("3. Serial number validation:");
+  if (!rc.serialChecked) {
+    line(`${L1}Not checked (` + (rc.fromSnapshot ? "the previous month came from the stored snapshot, which has no serial numbers" : "no Serial no. column") + ")");
+  } else if (!rc.serialChanges.length) {
+    line(`${L1}No Changes`);
   } else {
-    head("5. Serial number changes: not checked");
-    line(rc.fromSnapshot ? "• Last month came from the stored snapshot, which has no serial numbers." : "• The export has no Serial no. column.");
+    [SERIAL_CHANGED, SERIAL_ADDED, SERIAL_REMOVED].forEach(kind => {
+      const list = rc.serialChanges.filter(c => c.change === kind);
+      if (!list.length) { return; }
+      line(`${L1}${kind}: ${fmtNum(list.length)}`);
+      keysByCount(countBy(list.map(c => c.cur.assetClass))).forEach(t => {
+        const ofType = list.filter(c => c.cur.assetClass === t);
+        line(`${L2}${plural(t)}: ${fmtNum(ofType.length)}`);
+        if (list.length <= EMAIL_DETAIL_MAX) {
+          ofType.forEach(c => line(`${L3}Asset no: ${c.cur.assetId} - Serial number: ${c.prev.serial || "(blank)"} → ${c.cur.serial || "(blank)"}`));
+        }
+      });
+    });
   }
   line("");
-  head(`6. Scrapped and lost assets: ${fmtNum(rc.operational.length)}`);
-  line(`• Scrapped: ${fmtNum(scrapped.length)}` + (scrapped.length ? ` (${countText(countBy(scrapped.map(c => c.cur.assetClass)), 8)})` : ""));
-  line(`• Lost: ${fmtNum(lost.length)}` + (lost.length ? ` (${countText(countBy(lost.map(c => c.cur.assetClass)), 8)})` : ""));
-  line(`• Other status changes (not in this list): ${fmtNum(rc.changes.length - rc.operational.length)}`);
+  // Status changes this month by the status they ended in (only real changes; spelling differences are not changes)
+  const endedIn = (test: (st: string) => boolean) => rc.changes.filter(c => test(compactKey(c.cur.status)));
+  const groupsByStatus: [string, StatusChange[]][] = [
+    ["Scrapped", endedIn(k => k === "scrapped")],
+    ["Inactive", endedIn(k => k === "inactive")],
+    ["Lost", endedIn(k => k === "lost")],
+    ["Stolen", endedIn(k => k === "stolen")]
+  ];
+  head("4. Status changes validation:");
+  groupsByStatus.forEach(g => line(`${L1}${g[0]}: ${fmtNum(g[1].length)}`));
   line("");
-  head("7. PO validation");
-  if (!po.length) { line("• No new-asset POs this month."); }
-  // The model column of an unsupplied PO lists models with counts, e.g. "Bag (50)": the counts are dropped here
-  const model = (r: Cell[]) => String(r[1]).replace(/ \(\d+\)/g, "");
-  po.forEach(r => line(`• ${r[0] ? "PO " + r[0] + (model(r) ? " (" + model(r) + ")" : "") : "Blank PurchaseNo"}: ${fmtNum(r[2] as number)} in the export, ` +
-    (r[3] === "" ? "no quantity supplied" : `${fmtNum(r[3] as number)} supplied, variance ${signed(r[4] as number)}`) + ` - ${r[7]}`));
-  line(`• Missing or pending validations: ${open.length ? open.length : "none"}`);
-  line("");
-  head("8. Points for review");
-  if (review.length) { review.forEach(t => line(`• ${t}`)); } else { line("• None"); }
-  line("");
-  line("Details: Pivot & Summary, New Assets, " + (rc.removed.length ? "Removed Assets, " : "") + (rc.serialChecked ? "Serial Number Changes, " : "") +
-    "Scrap & Inactive Assets and POs Validated tabs in the attached workbook.");
+  head("4.1. Status-change details by Asset Type and Model:");
+  const shown = groupsByStatus.filter(g => g[1].length);
+  if (!shown.length) { line(`${L1}No status changes to Scrapped, Inactive, Lost or Stolen`); }
+  shown.forEach(g => {
+    line(`${L1}${g[0]}`);
+    typeCounts(g[1].map(c => c.cur)).forEach(t => {
+      const ofType = g[1].filter(c => c.cur.assetClass === t);
+      // Large groups as a count; small ones by model, with each asset and its Spider comment to complete
+      if (ofType.length > EMAIL_DETAIL_MAX) { line(`${L2}${plural(t)}: ${fmtNum(ofType.length)}`); return; }
+      line(`${L2}${t}`);
+      keysByCount(countBy(ofType.map(c => c.cur.model || "(no model)"))).forEach(m => {
+        const ofModel = ofType.filter(c => (c.cur.model || "(no model)") === m);
+        line(`${L3}${m}: ${ofModel.length}`);
+        ofModel.forEach(c => line(`${L4}Asset no: ${c.cur.assetId}` + (c.cur.serial ? ` - Serial number: ${c.cur.serial}` : "") +
+          spiderComment(c.cur) + " - " + EMAIL_NOTE));
+      });
+    });
+  });
   line("");
   line("Best regards,");
 
+  // The model column of an unsupplied PO lists models with counts, e.g. "Bag (50)": the counts are dropped here
+  const model = (r: Cell[]) => String(r[1]).replace(/ \(\d+\)/g, "");
   // Copilot in PowerPoint: 3 slides at most, numbers given exactly, the open VOIS template's look
   const ppt: string[] = [];
   const top = (m: Map<string, number>, n: number) => keysByCount(m).slice(0, n).map(k => `${k} ${fmtNum(m.get(k) || 0)}`).join(", ");
@@ -1735,7 +1823,10 @@ function monthlyReport(ctx: Ctx): MonthlyReport {
       `${r[3] === "" ? "-" : fmtNum(r[3] as number)}, ${r[4] === "" ? "-" : signed(r[4] as number)}, ${r[7]}`).join("; ") +
       (po.length > 4 ? `; and ${po.length - 4} more POs in the workbook` : "") : "no new-asset POs") +
     `. Then up to 3 bullets for review: ${review.length ? review.slice(0, 3).join("; ") : "none"}.`);
-  return { subject, email, heads, ppt };
+  const d = rc.curDay || ctx.asOf, n = d.getUTCDate();
+  const th = n % 10 === 1 && n !== 11 ? "st" : n % 10 === 2 && n !== 12 ? "nd" : n % 10 === 3 && n !== 13 ? "rd" : "th";
+  const attachment = `Spider Data Integrity - ${n}${th} of ${monthName(monthOf(d)).split(" ")[0]}`;
+  return { subject, attachment, email, heads, ppt };
 }
 
 // ============================================================================ checks
@@ -2749,9 +2840,10 @@ function buildEmailSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
     return first + lines.length + 2;
   };
   r = block("Email subject", "Copy the cell below into the email subject.", [rep.subject], []);
+  r = block("Attachment name", "Save the workbook (or the zip) with this name.", [rep.attachment], []);
   const emailFirst = r + 2;
   r = block("Email body", `Select B${emailFirst + 1}:B${emailFirst + rep.email.length}, copy (Ctrl+C) and paste into the email. ` +
-    "If Outlook shows a grid, use Paste Options > Keep Text Only.", rep.email, rep.heads);
+    `If Outlook shows a grid, use Paste Options > Keep Text Only. Replace each ${EMAIL_NOTE} with what the investigation found.`, rep.email, rep.heads);
   const prompt = rep.ppt.join(" ");
   const pptFirst = r + 2;
   r = block("Copilot in PowerPoint prompt", "Open a new presentation from the VOIS template, open Copilot, then select " +

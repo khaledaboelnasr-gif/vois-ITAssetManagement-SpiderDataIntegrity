@@ -25,7 +25,7 @@ PREV, CUR = datetime(2026, 9, 8), datetime(2026, 10, 8)
 
 STD = ["Asset no.", "Serial no.", "Asset status", "Asset Type", "Model", "Purchase date", "PurchaseNo", "Last scan",
        "Scandate Age in Days", "Function Unit", "AssetCreationDate", "Creation Age in Days", "AssetUpdateDate"]
-EXTRA = ["Hostname", "Assigned To", "User Email", "Location", "Company"]
+EXTRA = ["Hostname", "Assigned To", "User Email", "Location", "Company", "Comment", "Status comment"]
 HEADER = STD + ([] if MINIMAL else EXTRA)
 TYPES = [  # type, weight, models, needs user, scanned
     ("Notebook", 30, ["Latitude 5440", "EliteBook 840 G9", "ThinkPad T14"], True, True),
@@ -59,7 +59,7 @@ def make(i, when):
          "Asset Type": typ, "Model": random.choice(models), "Purchase date": bought, "PurchaseNo": f"45{random.randint(10000000, 10099999)}",
          "Last scan": None, "Function Unit": f"FU-{code}-{random.randint(1, 12):02d}", "AssetCreationDate": created, "AssetUpdateDate": updated,
          "Hostname": f"{code}L{i:07d}" if typ in ("Notebook", "Desktop") else "", "Assigned To": u[0], "User Email": u[1],
-         "Location": random.choice(sites), "Company": company, "_scanned": scanned}
+         "Location": random.choice(sites), "Company": company, "Comment": "", "Status comment": "", "_scanned": scanned}
     if scanned and status == "In operation":
         a["Last scan"] = when - timedelta(days=random.choice([1, 2, 3, 5, 8, 12, 20, 70]), hours=random.randint(0, 9))
     if i % 97 == 0 and a["Serial no."]:
@@ -91,7 +91,11 @@ for a in random.sample(cur, k=N // 25):
     a["AssetUpdateDate"] = CUR - timedelta(days=random.randint(1, 25), hours=random.randint(0, 8))
     s = a["Asset status"]
     if s in ("In operation", "Disabled", "In stock") and random.random() < 0.18:
-        a["Asset status"] = "Lost" if random.random() < 0.03 else "Scrapped"
+        a["Asset status"] = "Lost" if random.random() < 0.03 else "Stolen" if random.random() < 0.02 else "Scrapped"
+        a["Status comment"] = f"Write Off Memo as per INC{random.randint(10**11, 10**12 - 1)}"
+        if random.random() < 0.3: a["Comment"] = "Pending investigation"
+    elif s == "In operation" and random.random() < 0.02:
+        a["Asset status"] = "Inactive"
     elif s in ("In stock", "Ready for use", "Reserved", "To install"):
         a["Asset status"] = "In operation"
         if a["Asset Type"] in ("Notebook", "Desktop", "Headset", "Mobile"):
@@ -136,6 +140,7 @@ data = {"2026-09 Previous Export": [HEADER] + [row(a, PREV) for a in prev],
         "2026-10 Current Export": [HEADER] + [row(a, CUR) for a in cur],
         "PO Validation": [["Purchase Date", "Purchase Number", "Model", "Quantity", "Raised By", "Physical Security Validation", "Spider Validation"],
                           [serial(CUR - timedelta(days=25)), "1600513572", "Bags", 70 * k, "USER-0001", "Yes", "Yes"],
+                          [serial(CUR - timedelta(days=25)), "1600513572", "Mouses", 20 * k, "USER-0001", "Yes", "Yes"],
                           [serial(CUR - timedelta(days=20)), "1600599999", "Keyboards", 40, "USER-0002", "Pending", "Yes"]]}
 if not MINIMAL:
     data["Users (Entra)"] = [["Display Name", "Email", "Account Enabled", "Leaving Date"]] + [

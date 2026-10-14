@@ -1,5 +1,5 @@
 VOIS ASSET AUDIT SCRIPT - OVERVIEW
-Script version 2026.10.14.11
+Script version 2026.10.14.13
 ====================================================================
 
 Use this to review the script and ask for changes. To ask for a change,
@@ -44,9 +44,12 @@ name the tab and section, for example:
    - How to use the workbook, and the run information: tabs read, columns found, references used.
 
 1b) MONTHLY EMAIL (only when there is a previous month to compare with)
-   - The monthly email, ready to copy into Outlook: subject and body. It holds only what the monthly email
-     already had: totals, the summary by type, new and removed assets, serial number changes, Scrapped and
-     Lost, PO validation, and points for review. No names or emails.
+   - The monthly email, ready to copy into Outlook, in the team's own format ("Asset Governance Task - Spider
+     Data Integrity"): 1 Overall Summary, 2 New Assets Validation (by type and PO, empty PO), 2.1 P.Os Validation
+     (what each PO contains, what is already on Spider, what is still pending), 3 Serial number validation,
+     4 Status changes (Scrapped, Inactive, Lost, Stolen), 4.1 details by type and model. Groups of 10 or fewer
+     are listed asset by asset with the Spider status comment; replace each [add validation note] with what the
+     investigation found. Also the attachment name ("Spider Data Integrity - 14th of October").
    - A prompt to paste into Copilot in PowerPoint (opened from the VOIS template) that builds a 3-slide deck
      with charts from the same numbers. Kept under 2,000 characters.
 
