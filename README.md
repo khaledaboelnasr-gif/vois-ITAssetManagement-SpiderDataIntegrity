@@ -66,6 +66,14 @@ DUMP="Pivot & Summary:60,Quality Checks:45" node harness.mjs ../asset_audit_offi
 node history_harness.mjs ../history_store_officescript.ts ../asset_audit_officescript.ts ../reference_extract_officescript.ts synthetic.json
 ```
 
+Speed check: every Excel call is a round trip to Excel, so the number of Excel calls must not grow with the number of rows.
+The harness prints `excel calls` (about 4,000 for 5,000 rows and for 100,000 rows alike) and fails above `MAXCALLS`:
+
+```bash
+python3 gen_synthetic.py 100000 > big.json
+MAXCALLS=6000 NORERUN=1 node harness.mjs ../asset_audit_officescript.ts big.json
+```
+
 `harness.mjs` reads these environment options:
 
 | Option | Effect |
@@ -81,6 +89,8 @@ node history_harness.mjs ../history_store_officescript.ts ../asset_audit_offices
 | `MARK=1` | Fills the Physical Check sample and re-runs. |
 | `HISTOUT=<file>` | Saves `historyRows` to a file. |
 | `NORERUN=1` | Skips the re-run on the same workbook. |
+| `MAXCALLS=<n>` | Fails if the run makes more than n Excel calls (an Excel call inside a per-row loop). |
+| `BRIEFOUT=<file>` | Saves the agent brief (`agentInput`), to compare two versions. |
 
 An optional third argument is a history JSON file.
 

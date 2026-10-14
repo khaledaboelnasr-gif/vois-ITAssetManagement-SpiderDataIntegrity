@@ -4,15 +4,26 @@
 //      NOREF=1 (drop the Users and Intune tabs)  REFJSON=1 (pass them as usersJson / devicesJson instead of tabs)
 //      ONLYCUR=1 (drop the previous export)  SNAPSHOT=1 (previous month as a snapshot from an earlier run, not a tab)
 //      NOPO=1 (drop the PO tab)  POJSON=1 (pass the PO rows as poJson)  MARK=1 (fill the Physical Check sheet and re-run)
-//      HISTOUT=<file> (save historyRows)  TABNAMES=1 (tabs named "previous month export" / "this month export")
+//      HISTOUT=<file> (save historyRows)  BRIEFOUT=<file> (save agentInput)  MAXCALLS=<n> (fail above n Excel calls)
+//      TABNAMES=1 (tabs named "previous month export" / "this month export")
 import { stripTypeScriptTypes } from "node:module";
 import fs from "node:fs";
 import assert from "node:assert/strict";
 const [src, dataPath, histPath] = process.argv.slice(2);
 const js = stripTypeScriptTypes(fs.readFileSync(src, "utf8"));
-const any = new Proxy(function () {}, { get: (t, p) => p === Symbol.toPrimitive ? () => "x" : any, apply: () => any });
+// Every call into the mock Excel API is counted by method name: each one is a round trip to Excel in the real thing,
+// so a count that grows with the number of rows means an Excel call inside a per-row loop (very slow in Excel)
+const apiByName = new Map();
+const count = name => apiByName.set(name, (apiByName.get(name) || 0) + 1);
+let lastName = "";
+const any = new Proxy(function () {}, { get: (t, p) => { if (p === Symbol.toPrimitive) return () => "x"; lastName = String(p); return any; },
+  apply: () => { count(lastName); return any; } });
 const ExcelScript = new Proxy({}, { get: () => new Proxy({}, { get: (t2, q) => String(q) }) });
-const wrap = o => new Proxy(o, { get: (t, p) => p in t ? (typeof t[p] === "function" ? t[p].bind(t) : t[p]) : any });
+const wrap = o => new Proxy(o, { get: (t, p) => {
+  if (!(p in t)) { lastName = String(p); return any; }
+  if (typeof t[p] !== "function") return t[p];
+  return (...args) => { count(String(p)); return t[p].apply(t, args); };
+} });
 const colIdx = a => { let n = 0; for (const ch of a) n = n * 26 + ch.charCodeAt(0) - 64; return n - 1; };
 let calls = 0;
 class Range {
@@ -74,8 +85,12 @@ if (process.env.SNAPSHOT) {
 }
 const run = () => load()(wb, process.env.AUDIT || "2026-10-08", undefined, histPath ? fs.readFileSync(histPath, "utf8") : undefined,
   process.env.MARKET, "leavers, stock", process.env.SHARE === "1", process.env.MAPPINGS, usersJson, devicesJson, poJson, snapshot, false);
+apiByName.clear();
 let t0 = Date.now();
 const res = run();
+const apiTotal = Array.from(apiByName.values()).reduce((a, b) => a + b, 0);
+console.log("excel calls", apiTotal, "| most used:", Array.from(apiByName.entries()).sort((a, b) => b[1] - a[1]).slice(0, Number(process.env.TOPCALLS || 8)).map(e => e.join(" ")).join(", "));
+if (process.env.MAXCALLS && apiTotal > Number(process.env.MAXCALLS)) throw new Error(`Too many Excel calls: ${apiTotal} > ${process.env.MAXCALLS} (an Excel call inside a per-row loop?)`);
 console.log("run ms", Date.now() - t0, "| api calls", calls, "| sheets", wb.sheets.map(s => s.name + ":" + (s.values.length ? "src" : s.cells.size)).join(", "));
 const { agentInput, historyRows, runInfo, reconciliation, qualityChecks, snapshot: _s, ...head } = res;
 console.log(head);
@@ -84,6 +99,7 @@ console.log("--- reconciliation\n" + reconciliation.join("\n") + "\n--- quality 
 console.log("agentInput chars", agentInput.length, "| historyRows", historyRows.length);
 fs.writeFileSync("agent_input.md", agentInput);
 if (process.env.HISTOUT) fs.writeFileSync(process.env.HISTOUT, JSON.stringify(historyRows));
+if (process.env.BRIEFOUT) fs.writeFileSync(process.env.BRIEFOUT, agentInput.replace(/^.*(2026\.10\.14\.[0-9]+|Run time).*$/gm, ""));
 if (process.env.MARK) {
   const pc = wb.getWorksheet("Physical Check");
   for (let r = 4; pc.cells.get(`${r},0`) !== undefined; r++) {

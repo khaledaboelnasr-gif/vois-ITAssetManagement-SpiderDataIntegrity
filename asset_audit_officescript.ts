@@ -221,7 +221,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.14.8";
+const SCRIPT_VERSION = "2026.10.14.9";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -760,6 +760,24 @@ function uniqueCodes(a: Asset): string[] {
 function sevRank(code: string): number {
   return SEVERITY.indexOf(FLAG_INFO[code].sev);
 }
+// Records with no issue at all (scored dimensions) and with no issue in each dimension, in one pass over the list
+function cleanCounts(list: Asset[]): { clean: number; dims: number[] } {
+  const dims = ALL_DIMS.map(() => 0);
+  let clean = 0;
+  list.forEach(a => {
+    if (!a.flags.length) { clean++; dims.forEach((n, i) => { dims[i] = n + 1; }); return; }
+    const hit = ALL_DIMS.map(() => false);
+    let scored = false;
+    a.flags.forEach(f => {
+      const d = FLAG_INFO[f.code].dim, i = ALL_DIMS.indexOf(d);
+      if (i >= 0) { hit[i] = true; }
+      if (SCORED_DIMS.indexOf(d) >= 0) { scored = true; }
+    });
+    if (!scored) { clean++; }
+    hit.forEach((h, i) => { if (!h) { dims[i]++; } });
+  });
+  return { clean, dims };
+}
 function dataIssues(a: Asset): Flag[] {
   return a.flags.filter(f => SCORED_DIMS.indexOf(FLAG_INFO[f.code].dim) >= 0);
 }
@@ -842,17 +860,19 @@ function findTabs(wb: ExcelScript.Workbook, maps: Mappings): Tabs {
   const out: Tabs = { assets: [], users: [], devices: [], po: [] };
   let ownPo = "";
   wb.getWorksheets().forEach((w: ExcelScript.Worksheet) => {
-    const own = SHEETS.indexOf(w.getName()) >= 0 || w.getName() === MAPPINGS_SHEET;
-    if (own && w.getName() !== PO_SHEET) { return; }
+    // Each Excel call is a round trip to Excel, so the name is asked for once
+    const tab = w.getName();
+    const own = SHEETS.indexOf(tab) >= 0 || tab === MAPPINGS_SHEET;
+    if (own && tab !== PO_SHEET) { return; }
     const head = headRows(w);
     if (!head.length) { return; }
     const p = bestHeader(head, PO_COLS).pos;
     if (has(p, "number") && has(p, "quantity")) {
-      if (own) { ownPo = w.getName(); } else { out.po.push(w.getName()); }
+      if (own) { ownPo = tab; } else { out.po.push(tab); }
       return;
     }
     if (own) { return; }
-    const name = w.getName().toLowerCase();
+    const name = tab.toLowerCase();
     const a = bestHeader(head, ASSET_COLS, maps.columns).pos, u = bestHeader(head, USER_COLS).pos, d = bestHeader(head, DEVICE_COLS).pos;
     const idCols = ["assetId", "tag", "serial"].filter(f => has(a, f)).length;
     const isAsset = idCols > 0 && (has(a, "status") || has(a, "cls")) && Object.keys(a).length >= 3;
@@ -861,15 +881,15 @@ function findTabs(wb: ExcelScript.Workbook, maps: Mappings): Tabs {
     // Device-management exports also have serial and model columns: an asset tab needs a status or an asset no. / tag
     const deviceLike = isDevice && !has(a, "assetId") && !has(a, "tag") && !has(a, "status");
     if (DEVICE_TAB.test(name) && isDevice && !(isAsset && !deviceLike && /vcams|asset|inventory|export/.test(name))) {
-      out.devices.push(w.getName());
+      out.devices.push(tab);
     } else if (USER_TAB.test(name) && isUser && !isAsset) {
-      out.users.push(w.getName());
+      out.users.push(tab);
     } else if (isAsset && !deviceLike) {
-      out.assets.push(w.getName());
+      out.assets.push(tab);
     } else if (isDevice) {
-      out.devices.push(w.getName());
+      out.devices.push(tab);
     } else if (isUser) {
-      out.users.push(w.getName());
+      out.users.push(tab);
     }
   });
   if (!out.po.length && ownPo) { out.po.push(ownPo); }
@@ -1001,27 +1021,29 @@ function loadAssets(wb: ExcelScript.Workbook, sheets: string[], maps: Mappings):
     h.amb.forEach(x => { if (out.ambiguous.indexOf(x) < 0) { out.ambiguous.push(x); } });
     // Read only the columns the audit uses: the span between the first and the last of them, or column by column
     // when that span is mostly other columns (wide exports)
-    const top = used.getRowIndex() + h.row + 1, n = used.getRowCount() - h.row - 1;
+    // Each Excel call is a round trip to Excel: ask for the used range's position once
+    const uRow = used.getRowIndex(), uCol = used.getColumnIndex(), uRows = used.getRowCount(), uCols = used.getColumnCount();
+    const top = uRow + h.row + 1, n = uRows - h.row - 1;
     const colAbs: Record<string, number> = {};
-    fields.forEach(f => { colAbs[f] = used.getColumnIndex() + h.pos[f]; });
+    fields.forEach(f => { colAbs[f] = uCol + h.pos[f]; });
     let c0 = Math.min(...fields.map(f => h.pos[f]));
     const c1 = Math.max(...fields.map(f => h.pos[f]));
     let values: Raw[][];
-    progress(`'${sheetName}': ${n.toLocaleString("en-US")} rows x ${used.getColumnCount()} columns; reading the ${fields.length} columns the audit uses`);
+    progress(`'${sheetName}': ${n.toLocaleString("en-US")} rows x ${uCols} columns; reading the ${fields.length} columns the audit uses`);
     if (c1 - c0 + 1 > 1.5 * fields.length) {
       const pos: Record<string, number> = {};
       const cols = fields.map((f, i) => {
         pos[f] = i;
-        return readBlock(ws, top, used.getColumnIndex() + h.pos[f], n, 1, `'${sheetName}' column ${i + 1} of ${fields.length} (${STANDARD_HEADER[f] || f})`);
+        return readBlock(ws, top, uCol + h.pos[f], n, 1, `'${sheetName}' column ${i + 1} of ${fields.length} (${STANDARD_HEADER[f] || f})`);
       });
       values = [];
       for (let i = 0; i < n; i++) { values.push(cols.map(c => c[i] ? c[i][0] : "")); }
       Object.keys(pos).forEach(f => { h.pos[f] = pos[f]; });
       c0 = 0;
     } else {
-      values = readBlock(ws, top, used.getColumnIndex() + c0, n, c1 - c0 + 1, `'${sheetName}'`);
+      values = readBlock(ws, top, uCol + c0, n, c1 - c0 + 1, `'${sheetName}'`);
     }
-    out.tabs.push({ name: ws.getName(), headerAbs: top - 1, lastAbs: top + n - 1, colAbs, rows: n });
+    out.tabs.push({ name: sheetName, headerAbs: top - 1, lastAbs: top + n - 1, colAbs, rows: n });
     const at = (r: Raw[], f: string): Raw => h.pos[f] === undefined ? "" : r[h.pos[f] - c0];
     const get = (r: Raw[], f: string) => { const v = at(r, f); return String(v === undefined || v === null ? "" : v).trim(); };
     const num = (r: Raw[], f: string): Cell => { const v = at(r, f); return typeof v === "number" ? v : get(r, f) && isFinite(Number(get(r, f))) ? Number(get(r, f)) : ""; };
@@ -1041,7 +1063,7 @@ function loadAssets(wb: ExcelScript.Workbook, sheets: string[], maps: Mappings):
         if (seenEarlier.has(sig)) { out.crossTabDups++; out.rows--; continue; }
         seenHere.add(sig);
       }
-      a.sheet = ws.getName(); a.row = top + i + 1;
+      a.sheet = sheetName; a.row = top + i + 1;
       a.mac = get(r, "mac"); a.clsRaw = get(r, "cls"); a.model = get(r, "model"); a.statusRaw = get(r, "status");
       a.makeRaw = get(r, "make"); a.user = get(r, "user"); a.email = get(r, "email").toLowerCase(); a.empId = get(r, "empId");
       a.costCenter = get(r, "costCenter"); a.location = get(r, "location"); a.company = get(r, "company");
@@ -1108,7 +1130,7 @@ function loadUsers(wb: ExcelScript.Workbook, sheets: string[], json: string | un
     if (!ws) { return; }
     const values = readValues(ws), h = bestHeader(values, USER_COLS);
     if (h.row < 0) { return; }
-    users.source = (users.source ? users.source + ", " : "") + `tab '${ws.getName()}'`;
+    users.source = (users.source ? users.source + ", " : "") + `tab '${sheetName}'`;
     const get = (r: Raw[], f: string) => h.pos[f] === undefined ? "" : String(r[h.pos[f]] === undefined ? "" : r[h.pos[f]]).trim();
     for (let i = h.row + 1; i < values.length; i++) {
       const r = values[i], email = get(r, "email"), empId = get(r, "empId");
@@ -1150,7 +1172,7 @@ function loadDevices(wb: ExcelScript.Workbook, sheets: string[], json: string | 
     if (!ws) { return; }
     const values = readValues(ws), h = bestHeader(values, DEVICE_COLS);
     if (h.row < 0) { return; }
-    out.source = (out.source ? out.source + ", " : "") + `tab '${ws.getName()}'`;
+    out.source = (out.source ? out.source + ", " : "") + `tab '${sheetName}'`;
     const get = (r: Raw[], f: string) => h.pos[f] === undefined ? "" : String(r[h.pos[f]] === undefined ? "" : r[h.pos[f]]).trim();
     for (let i = h.row + 1; i < values.length; i++) {
       const r = values[i];
@@ -2266,15 +2288,18 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
   // --- 4 Integrity Score
   progress("Writing Integrity Score");
   ws = newSheet(wb, "Integrity Score", "Integrity Score - " + date, "Share of in-scope records with no issue in each dimension (higher is better)");
-  const dimRow = (label: string, list: Asset[]): Cell[] => [label, list.length, ratio(list.filter(a => !dataIssues(a).length).length, list.length)]
-    .concat(ALL_DIMS.map(d => ratio(list.filter(a => !a.flags.some(f => FLAG_INFO[f.code].dim === d)).length, list.length)));
+  const dimRow = (label: string, list: Asset[]): Cell[] => {
+    const c = cleanCounts(list);
+    return [label as Cell, list.length, ratio(c.clean, list.length)].concat(c.dims.map(n => ratio(n, list.length)));
+  };
+  const scopeByMarket = groupBy(scope, a => a.market), scopeByType = groupBy(scope, a => a.assetClass);
   const dimHeader = (first: string) => [first, "Records", "Integrity Score"].concat(ALL_DIMS.map(d => d + (SCORED_DIMS.indexOf(d) < 0 ? " (not in score)" : "")));
   const dimOpts: TableOpts = { widths: [170, 70, 80, 90, 90, 90, 90, 90, 110, 110], pct: [2, 3, 4, 5, 6, 7, 8, 9], bars: [2] };
   r = sectionTitle(ws, 3, "By market");
-  r = addTable(ws, r, "ScoreMarket", dimHeader("Market"), ctx.markets.map(m => dimRow(m, scope.filter(a => a.market === m)))
+  r = addTable(ws, r, "ScoreMarket", dimHeader("Market"), ctx.markets.map(m => dimRow(m, scopeByMarket.get(m) || []))
     .concat(ctx.markets.length > 1 ? [dimRow("All markets", scope)] : []), dimOpts);
   r = sectionTitle(ws, r, "By asset type");
-  r = addTable(ws, r, "ScoreType", dimHeader("Asset Type"), keysByCount(countBy(scope.map(a => a.assetClass))).map(c => dimRow(c, scope.filter(a => a.assetClass === c))), dimOpts);
+  r = addTable(ws, r, "ScoreType", dimHeader("Asset Type"), keysByCount(countBy(scope.map(a => a.assetClass))).map(c => dimRow(c, scopeByType.get(c) || [])), dimOpts);
   if (ctx.cols.has("location")) {
     r = sectionTitle(ws, r, "By site (lowest score first)", `Sites with at least ${SETTINGS.siteMinRecords} records`);
     r = addTable(ws, r, "ScoreSite", dimHeader("Market | Site"), Array.from(groupBy(scope, a => a.market + " | " + (a.location || "(no location)")).entries())
@@ -2818,25 +2843,31 @@ function buildAgentInput(ctx: Ctx): string {
 
   L.push("## 2. Integrity by data-quality dimension (share of in-scope records with no issue)",
     mdTable(["Market", "Records", "Score"].concat(ALL_DIMS), ctx.markets.concat(ctx.markets.length > 1 ? [""] : []).map(m => {
-      const list = scope.filter(a => !m || a.market === m);
-      const share = (ok: (a: Asset) => boolean) => pct(list.filter(a => ok(a)).length, list.length);
-      return [m || "All markets", list.length, share(a => !dataIssues(a).length)]
-        .concat(ALL_DIMS.map(d => share(a => !a.flags.some(f => FLAG_INFO[f.code].dim === d))));
+      const list = m ? scope.filter(a => a.market === m) : scope, c = cleanCounts(list);
+      return [m || "All markets", list.length, pct(c.clean, list.length)].concat(c.dims.map(n => pct(n, list.length)));
     })), "");
 
   L.push("## 3. Checks (all markets, most severe first)");
   const byCode = flagCounts(assets);
+  // The market of every flagged asset, per check, in one pass (instead of one pass over all assets per check)
+  const marketsByCode = new Map<string, string[]>();
+  assets.forEach(a => a.flags.forEach(f => {
+    const list = marketsByCode.get(f.code);
+    if (list) { list.push(a.market); } else { marketsByCode.set(f.code, [a.market]); }
+  }));
   const prevChecks = kPrev.checks;
   L.push(mdTable(["Check", "Severity", "Dimension", "Assets", "Share of in scope", "Previous", "Most affected markets", "Process-wide", "Fix", "Owner"],
     Array.from(byCode.keys()).sort((a, b) => sevRank(a) - sevRank(b) || (byCode.get(b) || 0) - (byCode.get(a) || 0)).map(c => {
-      const n = byCode.get(c) || 0, list = assets.filter(a => hasFlag(a, c));
+      const n = byCode.get(c) || 0;
       return [FLAG_INFO[c].name, FLAG_INFO[c].sev, FLAG_INFO[c].dim, n, pct(n, scope.length), prevAny ? (prevChecks.get(c) || 0) : "",
-        topList(list.map(a => a.market), 3), n > SETTINGS.systemicShare * scope.length && FLAG_INFO[c].dim !== LIFECYCLE ? "Yes" : "",
+        topList(marketsByCode.get(c) || [], 3), n > SETTINGS.systemicShare * scope.length && FLAG_INFO[c].dim !== LIFECYCLE ? "Yes" : "",
         FLAG_INFO[c].fix, FLAG_INFO[c].owner];
     })), "");
   if (ctx.markets.length > 1) {
-    L.push("## 4. Checks by market", mdTable(["Check"].concat(ctx.markets), keysByCount(byCode).map(c =>
-      [FLAG_INFO[c].name as Cell].concat(ctx.markets.map(m => assets.filter(a => a.market === m && hasFlag(a, c)).length)))), "");
+    L.push("## 4. Checks by market", mdTable(["Check"].concat(ctx.markets), keysByCount(byCode).map(c => {
+      const perMarket = countBy(marketsByCode.get(c) || []);
+      return [FLAG_INFO[c].name as Cell].concat(ctx.markets.map(m => perMarket.get(m) || 0));
+    })), "");
   }
   if (ctx.cols.has("location")) {
     const sites = Array.from(groupBy(scope, a => a.market + " | " + (a.location || "(no location)")).entries())
@@ -2872,11 +2903,12 @@ function buildAgentInput(ctx: Ctx): string {
   if (moves.length) { L.push("Stock moves before buying:", mdTable(["Market", "Type", "Short site", "Deployed / month", "Suggestion"], moves.slice(0, 15).map(m => [m[0], m[1], m[2], m[4], m[8]]))); }
   L.push("");
   const inUse = assets.filter(a => a.stage === IN_USE);
+  const oldStock = countBy(assets.filter(a => hasFlag(a, "STOCK_OVER_AGE")).map(a => a.market + "\u0001" + a.assetClass));
   L.push("## 10. Lifecycle", mdTable(["Market", "Type", "In use", "Beyond expected life", "Out of warranty", "Stock beyond life"],
     Array.from(groupBy(inUse, a => a.market + "\u0001" + a.assetClass).entries()).map(e => {
       const [m, c] = e[0].split("\u0001");
       return [m, c, e[1].length, e[1].filter(a => hasFlag(a, "OVER_AGE")).length, e[1].filter(a => hasFlag(a, "WARRANTY_EXPIRED")).length,
-        assets.filter(a => a.market === m && a.assetClass === c && hasFlag(a, "STOCK_OVER_AGE")).length] as Cell[];
+        oldStock.get(e[0]) || 0] as Cell[];
     }).filter(r => (r[3] as number) + (r[4] as number) + (r[5] as number) > 0).sort((a, b) => (b[3] as number) - (a[3] as number)).slice(0, 20)), "");
   const pt = physicalText(ctx.physical);
   L.push("## 11. Physical check", pt || (ctx.physical.sample.length ? `A sample of ${ctx.physical.sample.length} assets is ready on the Physical Check tab; not yet checked.` : "Not used."), "");
