@@ -17,3 +17,4 @@ test/big.json
 test/wide.json
 test/minimal.json
 test/hist*.json
+test/check.ts

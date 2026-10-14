@@ -55,6 +55,7 @@ const tabName = n => process.env.TABNAMES ? ({ [PREV_TAB]: "previous month expor
 const wb = { sheets: Object.keys(data).filter(n => !drop(n)).map(n => wrap(new Sheet(tabName(n), pad(data[n])))),
   tableNames: new Set(),
   getWorksheets() { return this.sheets; }, getWorksheet(n) { return this.sheets.find(s => s.name === n); },
+  getTable(n) { return this.tableNames.has(String(n).toLowerCase()) ? wrap({ getName: () => n }) : undefined; },
   addWorksheet(n) { if (this.getWorksheet(n)) throw new Error("dup sheet " + n); const s = wrap(new Sheet(n)); this.sheets.push(s); return s; } };
 // REFJSON=1: compact JSON like reference_extract_officescript.ts produces
 const usersJson = process.env.REFJSON ? JSON.stringify(data["Users (Entra)"].slice(1).map(r => [r[1], "", r[2] === "False" ? "0" : "1", r[3]])) : undefined;

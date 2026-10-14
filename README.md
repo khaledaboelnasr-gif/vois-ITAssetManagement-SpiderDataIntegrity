@@ -84,23 +84,26 @@ node history_harness.mjs ../history_store_officescript.ts ../asset_audit_offices
 
 An optional third argument is a history JSON file.
 
-## Type-check
+## Check the scripts before pasting them into Excel
+
+Run both checks on all three scripts. Both must report no problems.
 
 ```bash
 cd test
 npm install
-cp ../asset_audit_officescript.ts script.ts && npx tsc --noEmit --strict --target es2017 script.ts excelscript.d.ts
-cp ../history_store_officescript.ts store.ts && npx tsc --noEmit --strict --target es2017 store.ts excelscript.d.ts
-cp ../reference_extract_officescript.ts extract.ts && npx tsc --noEmit --strict --target es2017 extract.ts excelscript.d.ts
-```
-
-All three must type-check with no errors (strict, no `any`).
-
-Then run the Office Scripts rules that `tsc` does not check. Array method callbacks must be inline arrow functions, and explicit `any` is not allowed:
-
-```bash
+# 1. Microsoft's official Office Scripts types (test/excelscript-official.d.ts, from OfficeDev/office-scripts-docs-reference)
+for f in asset_audit history_store reference_extract; do
+  cp ../${f}_officescript.ts check.ts && npx tsc --noEmit --strict --target es2017 --lib es2017 check.ts excelscript-official.d.ts
+done
+# 2. Office Scripts rules that TypeScript does not check
 node lint_officescript.mjs ../asset_audit_officescript.ts ../history_store_officescript.ts ../reference_extract_officescript.ts
 ```
+
+Check 2 covers three rules:
+
+- Array callbacks must be written inline (`list.sort((a, b) => ...)`, not `list.sort(order)`).
+- No `any`.
+- Excel objects (sheets, tables, ranges) may only be held in a variable filled straight from an Excel call. Keep the **name** and look the object up again (`workbook.getTable("tblNewAssets")`), instead of storing the object in another object, an array literal or a property.
 
 ## Data rules
 

@@ -21,7 +21,8 @@ function main(workbook: ExcelScript.Workbook, kind: string, market?: string): Ex
   if (k !== "users" && k !== "devices") { throw new Error(`Unknown kind '${kind}'. Use "users" or "devices".`); }
   const cols = k === "users" ? USER_COLS : DEVICE_COLS;
   const need = k === "users" ? ["email", "empId"] : ["name", "serial"];
-  let best: { ws: ExcelScript.Worksheet | null; row: number; pos: Record<string, number>; n: number } = { ws: null, row: -1, pos: {}, n: 0 };
+  // The sheet NAME is kept, not the sheet object: Office Scripts does not allow storing Excel objects
+  let best: { sheet: string; row: number; pos: Record<string, number>; n: number } = { sheet: "", row: -1, pos: {}, n: 0 };
   workbook.getWorksheets().forEach((ws: ExcelScript.Worksheet) => {
     const used = ws.getUsedRange(true);
     if (!used) { return; }
@@ -29,13 +30,14 @@ function main(workbook: ExcelScript.Workbook, kind: string, market?: string): Ex
       used.getColumnCount()).getValues() as Raw[][];
     head.forEach((r, i) => {
       const pos = mapColumns(r.map(v => headerKey(v)), cols), n = Object.keys(pos).length;
-      if (n > best.n && need.some(f => pos[f] !== undefined)) { best = { ws, row: i, pos, n }; }
+      if (n > best.n && need.some(f => pos[f] !== undefined)) { best = { sheet: ws.getName(), row: i, pos, n }; }
     });
   });
-  if (!best.ws) {
+  const ws = workbook.getWorksheet(best.sheet);
+  if (!ws) {
     throw new Error(`No ${k} sheet found. Expected a header row with ` + need.map(f => cols[f].slice(0, 3).join(" / ")).join(" or ") + ".");
   }
-  const ws = best.ws as ExcelScript.Worksheet, pos = best.pos;
+  const pos = best.pos;
   const all = readValues(ws), header = all[best.row], values = all.slice(best.row + 1);
   const get = (r: Raw[], f: string) => pos[f] === undefined ? "" : String(r[pos[f]] === undefined || r[pos[f]] === null ? "" : r[pos[f]]).trim();
   const date = (r: Raw[], f: string) => pos[f] === undefined ? "" : dayText(parseDate(r[pos[f]]));

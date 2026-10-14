@@ -45,9 +45,9 @@ function main(workbook: ExcelScript.Workbook, auditDate?: string, previousDate?:
     throw new Error("No VCAMS asset export found. The export needs a header row with an Asset no., asset tag or serial " +
       "number column and a status or asset type column.");
   }
-  const roles = splitExports(tabs.assets, maps);
-  const cur = loadAssets(roles.cur, maps);
-  const prevLoad = roles.prev.length ? loadAssets(roles.prev, maps) : null;
+  const roles = splitExports(workbook, tabs.assets, maps);
+  const cur = loadAssets(workbook, roles.cur, maps);
+  const prevLoad = roles.prev.length ? loadAssets(workbook, roles.prev, maps) : null;
   const reconciling = !!prevLoad || !!previousSnapshot;
   if (reconciling) {
     [cur].concat(prevLoad ? [prevLoad] : []).forEach((l, i) => {
@@ -71,8 +71,8 @@ function main(workbook: ExcelScript.Workbook, auditDate?: string, previousDate?:
   const prevAssets = prevLoad ? prevLoad.assets.filter(a => inMarket(a)) : snap ? snap.assets.filter(a => inMarket(a)) : null;
   const prevPeriod = previousDate && parseDate(previousDate) ? monthOf(parseDate(previousDate) as Date) :
     roles.prevPeriod || (snap ? snap.period : "") || monthOf(new Date(Date.UTC(asOf.getUTCFullYear(), asOf.getUTCMonth() - 1, 1)));
-  const users = loadUsers(tabs.users, usersJson, asOf);
-  const devices = loadDevices(tabs.devices, devicesJson, maps);
+  const users = loadUsers(workbook, tabs.users, usersJson, asOf);
+  const devices = loadDevices(workbook, tabs.devices, devicesJson, maps);
   const markets = keysByCount(countBy(assets.map(a => a.market)));
 
   const ctx: Ctx = {
@@ -82,12 +82,12 @@ function main(workbook: ExcelScript.Workbook, auditDate?: string, previousDate?:
       userOk: 0, userChecked: 0 },
     stockAgeSource: cur.cols.has("statusDate") ? "status date" : cur.cols.has("updated") ? "asset update date (approximate)" :
       cur.cols.has("purchase") ? "purchase date (no status date column)" : "",
-    deploySource: "", recon: emptyRecon(), po: loadPo(tabs.po, poJson), formulas: !shareSafe && !marketFilter,
+    deploySource: "", recon: emptyRecon(), po: loadPo(workbook, tabs.po, poJson), formulas: !shareSafe && !marketFilter,
     curTabs: cur.tabs, prevTabs: prevLoad ? prevLoad.tabs : [], tokens: []
   };
   if (prevAssets) {
     ctx.recon = reconcile(ctx, cur, prevLoad, prevAssets, assets, prevLoad ? "previous export tab " +
-      roles.prev.map(w => `'${w.getName()}'`).join(", ") : "snapshot from the previous run", prevPeriod);
+      roles.prev.map(n => `'${n}'`).join(", ") : "snapshot from the previous run", prevPeriod);
   }
   ctx.deploySource = ctx.recon.available ? "status changes into In operation since the previous export (exact)" :
     cur.cols.has("deployDate") ? "deployment date (last 90 days / 3)" : cur.cols.has("statusDate") ?
@@ -106,9 +106,9 @@ function main(workbook: ExcelScript.Workbook, auditDate?: string, previousDate?:
   const colsText = (l: AssetLoad) => Array.from(l.found.keys()).map(f => `${STANDARD_HEADER[f] || f} = '${l.found.get(f)}'`).join("; ");
   ctx.runInfo = [
     ["Script version", SCRIPT_VERSION],
-    ["Current export", `${roles.cur.map(w => w.getName()).join(", ")} - as of ${fmtDay(asOf)}` +
+    ["Current export", `${roles.cur.join(", ")} - as of ${fmtDay(asOf)}` +
       (auditDate ? " (given)" : " (today)") + ` - history period ${period}`],
-    ["Previous export", prevLoad ? `${roles.prev.map(w => w.getName()).join(", ")} - ${prevPeriod}` : snap ?
+    ["Previous export", prevLoad ? `${roles.prev.join(", ")} - ${prevPeriod}` : snap ?
       `Snapshot of ${snap.period} (${snap.assets.length} assets; asset no., status, type, model, PO only)` :
       "None - reconciliation (new / removed / status changes) skipped. Add the previous export as a tab named '... Previous Export'"],
     ["How the exports were told apart", roles.note],
@@ -139,7 +139,10 @@ function main(workbook: ExcelScript.Workbook, auditDate?: string, previousDate?:
   ];
   buildWorkbook(workbook, ctx);
   if (shareSafe) {
-    roles.cur.concat(roles.prev, tabs.users, tabs.devices).forEach(w => w.delete());
+    roles.cur.concat(roles.prev, tabs.users, tabs.devices).forEach(n => {
+      const w = workbook.getWorksheet(n);
+      if (w) { w.delete(); }
+    });
   }
   const k = kpiValues(metricsFor(current, ""));
   const flagCount = flagCounts(assets);
@@ -189,7 +192,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.14.4";
+const SCRIPT_VERSION = "2026.10.14.5";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -797,13 +800,14 @@ function headRows(ws: ExcelScript.Worksheet): Raw[][] {
     used.getColumnCount()).getValues() as Raw[][];
 }
 
-interface Tabs { assets: ExcelScript.Worksheet[]; users: ExcelScript.Worksheet[]; devices: ExcelScript.Worksheet[]; po: ExcelScript.Worksheet[]; }
+// Sheet NAMES, never sheet objects: Office Scripts does not allow storing Excel objects (look them up by name instead)
+interface Tabs { assets: string[]; users: string[]; devices: string[]; po: string[]; }
 // Sorts the workbook's tabs into asset exports, PO validation, user references and device references. Our own
 // result sheets are skipped (so re-running on the same workbook works), except POs Validated, which echoes the
 // user's PO data and is read back when there is no other PO tab.
 function findTabs(wb: ExcelScript.Workbook, maps: Mappings): Tabs {
   const out: Tabs = { assets: [], users: [], devices: [], po: [] };
-  let ownPo: ExcelScript.Worksheet | null = null;
+  let ownPo = "";
   wb.getWorksheets().forEach((w: ExcelScript.Worksheet) => {
     const own = SHEETS.indexOf(w.getName()) >= 0 || w.getName() === MAPPINGS_SHEET;
     if (own && w.getName() !== PO_SHEET) { return; }
@@ -811,7 +815,7 @@ function findTabs(wb: ExcelScript.Workbook, maps: Mappings): Tabs {
     if (!head.length) { return; }
     const p = bestHeader(head, PO_COLS).pos;
     if (has(p, "number") && has(p, "quantity")) {
-      if (own) { ownPo = w; } else { out.po.push(w); }
+      if (own) { ownPo = w.getName(); } else { out.po.push(w.getName()); }
       return;
     }
     if (own) { return; }
@@ -824,15 +828,15 @@ function findTabs(wb: ExcelScript.Workbook, maps: Mappings): Tabs {
     // Device-management exports also have serial and model columns: an asset tab needs a status or an asset no. / tag
     const deviceLike = isDevice && !has(a, "assetId") && !has(a, "tag") && !has(a, "status");
     if (DEVICE_TAB.test(name) && isDevice && !(isAsset && !deviceLike && /vcams|asset|inventory|export/.test(name))) {
-      out.devices.push(w);
+      out.devices.push(w.getName());
     } else if (USER_TAB.test(name) && isUser && !isAsset) {
-      out.users.push(w);
+      out.users.push(w.getName());
     } else if (isAsset && !deviceLike) {
-      out.assets.push(w);
+      out.assets.push(w.getName());
     } else if (isDevice) {
-      out.devices.push(w);
+      out.devices.push(w.getName());
     } else if (isUser) {
-      out.users.push(w);
+      out.users.push(w.getName());
     }
   });
   if (!out.po.length && ownPo) { out.po.push(ownPo); }
@@ -852,7 +856,9 @@ function tabDate(name: string): Date | null {
   return null;
 }
 // The newest AssetUpdateDate (else creation date, else last scan) in a tab: the older export has older data
-function latestDate(ws: ExcelScript.Worksheet, maps: Mappings): number {
+function latestDate(wb: ExcelScript.Workbook, name: string, maps: Mappings): number {
+  const ws = wb.getWorksheet(name);
+  if (!ws) { return 0; }
   const used = ws.getUsedRange(true);
   if (!used) { return 0; }
   const h = bestHeader(headRows(ws), ASSET_COLS, maps.columns);
@@ -862,26 +868,26 @@ function latestDate(ws: ExcelScript.Worksheet, maps: Mappings): number {
   return values.reduce((mx: number, r) => { const d = parseDate(r[0]); return d && d.getTime() > mx ? d.getTime() : mx; }, 0);
 }
 // Which export tab is the previous month and which the current one
-function splitExports(tabs: ExcelScript.Worksheet[], maps: Mappings): { cur: ExcelScript.Worksheet[]; prev: ExcelScript.Worksheet[]; prevPeriod: string; note: string } {
+function splitExports(wb: ExcelScript.Workbook, tabs: string[], maps: Mappings): { cur: string[]; prev: string[]; prevPeriod: string; note: string } {
   if (tabs.length === 1) { return { cur: tabs, prev: [], prevPeriod: "", note: "One export tab" }; }
   const PREV = /\b(prev|previous|last|old|before|prior)\b/i, CUR = /\b(current|curr|this|latest|now)\b/i;
-  const period = (w: ExcelScript.Worksheet) => { const d = tabDate(w.getName()); return d ? monthOf(d) : ""; };
-  const prev = tabs.filter(w => PREV.test(w.getName())), cur = tabs.filter(w => !PREV.test(w.getName()));
-  if (prev.length && cur.length && (cur.some(w => CUR.test(w.getName())) || cur.length === 1)) {
-    return { cur, prev, prevPeriod: period(prev[0]), note: "By tab name: 'previous' = " + prev.map(w => w.getName()).join(", ") };
+  const period = (n: string) => { const d = tabDate(n); return d ? monthOf(d) : ""; };
+  const prev = tabs.filter(n => PREV.test(n)), cur = tabs.filter(n => !PREV.test(n));
+  if (prev.length && cur.length && (cur.some(n => CUR.test(n)) || cur.length === 1)) {
+    return { cur, prev, prevPeriod: period(prev[0]), note: "By tab name: 'previous' = " + prev.join(", ") };
   }
   if (tabs.length === 2) {
-    const d = tabs.map(w => tabDate(w.getName()));
+    const d = tabs.map(n => tabDate(n));
     if (d[0] && d[1] && d[0].getTime() !== d[1].getTime()) {
       const older = d[0].getTime() < d[1].getTime() ? 0 : 1;
       return { cur: [tabs[1 - older]], prev: [tabs[older]], prevPeriod: monthOf(d[older] as Date),
-        note: `By the dates in the tab names: '${tabs[older].getName()}' is the older export` };
+        note: `By the dates in the tab names: '${tabs[older]}' is the older export` };
     }
-    const latest = tabs.map(w => latestDate(w, maps));
+    const latest = tabs.map(n => latestDate(wb, n, maps));
     if (latest[0] && latest[1] && latest[0] !== latest[1]) {
       const older = latest[0] < latest[1] ? 0 : 1;
       return { cur: [tabs[1 - older]], prev: [tabs[older]], prevPeriod: period(tabs[older]),
-        note: `By the newest update date in each tab: '${tabs[older].getName()}' is older (${fmtDay(new Date(latest[older]))} vs ` +
+        note: `By the newest update date in each tab: '${tabs[older]}' is older (${fmtDay(new Date(latest[older]))} vs ` +
           `${fmtDay(new Date(latest[1 - older]))}). Name the tabs '... Previous Export' / '... Current Export' to be sure.` };
     }
   }
@@ -916,11 +922,13 @@ function idKey(s: string): string {
 }
 
 const DATE_FIELDS = ["purchase", "warranty", "verified", "lastSeen", "statusDate", "deployDate", "created", "updated"];
-function loadAssets(sheets: ExcelScript.Worksheet[], maps: Mappings): AssetLoad {
+function loadAssets(wb: ExcelScript.Workbook, sheets: string[], maps: Mappings): AssetLoad {
   const out: AssetLoad = { assets: [], rows: 0, unique: 0, blankIds: 0, dupIds: 0, crossTabDups: 0, cols: new Set<string>(),
     found: new Map<string, string>(), ambiguous: [], tabs: [] };
   const seenEarlier = new Set<string>();
-  sheets.forEach(ws => {
+  sheets.forEach(sheetName => {
+    const ws = wb.getWorksheet(sheetName);
+    if (!ws) { return; }
     const used = ws.getUsedRange(true);
     if (!used) { return; }
     const head = headRows(ws), h = bestHeader(head, ASSET_COLS, maps.columns);
@@ -1018,7 +1026,7 @@ function addUser(users: Users, u: UserRef, asOf: Date): void {
   if (!u.active) { users.inactive++; }
 }
 // Users: compact JSON [[email, employeeId, active 1/0/"", leaveDate YYYY-MM-DD], ...] or a Users tab
-function loadUsers(sheets: ExcelScript.Worksheet[], json: string | undefined, asOf: Date): Users {
+function loadUsers(wb: ExcelScript.Workbook, sheets: string[], json: string | undefined, asOf: Date): Users {
   const users: Users = { source: "", byEmail: new Map<string, UserRef>(), byEmp: new Map<string, UserRef>(), count: 0, inactive: 0 };
   if (json) {
     const rows: string[][] = JSON.parse(json);
@@ -1027,7 +1035,9 @@ function loadUsers(sheets: ExcelScript.Worksheet[], json: string | undefined, as
       active: String(r[2]) !== "0", leaveDate: parseDate(String(r[3] || "")) }, asOf));
     return users;
   }
-  sheets.forEach(ws => {
+  sheets.forEach(sheetName => {
+    const ws = wb.getWorksheet(sheetName);
+    if (!ws) { return; }
     const values = readValues(ws), h = bestHeader(values, USER_COLS);
     if (h.row < 0) { return; }
     users.source = (users.source ? users.source + ", " : "") + `tab '${ws.getName()}'`;
@@ -1043,7 +1053,7 @@ function loadUsers(sheets: ExcelScript.Worksheet[], json: string | undefined, as
   return users;
 }
 // Devices: compact JSON [[name, serial, lastSeen YYYY-MM-DD, user, market], ...] or an Intune / SCCM tab
-function loadDevices(sheets: ExcelScript.Worksheet[], json: string | undefined, maps: Mappings): Devices {
+function loadDevices(wb: ExcelScript.Workbook, sheets: string[], json: string | undefined, maps: Mappings): Devices {
   const out: Devices = { source: "", list: [], bySerial: new Map<string, DeviceRef>(), byName: new Map<string, DeviceRef>() };
   const add = (d: DeviceRef) => {
     if (!d.nameN && !d.serialN) { return; }
@@ -1067,7 +1077,9 @@ function loadDevices(sheets: ExcelScript.Worksheet[], json: string | undefined, 
     rows.forEach(r => add(ref(String(r[0] || ""), String(r[1] || ""), parseDate(String(r[2] || "")), String(r[3] || ""), String(r[4] || ""))));
     return out;
   }
-  sheets.forEach(ws => {
+  sheets.forEach(sheetName => {
+    const ws = wb.getWorksheet(sheetName);
+    if (!ws) { return; }
     const values = readValues(ws), h = bestHeader(values, DEVICE_COLS);
     if (h.row < 0) { return; }
     out.source = (out.source ? out.source + ", " : "") + `tab '${ws.getName()}'`;
@@ -1085,7 +1097,7 @@ function loadDevices(sheets: ExcelScript.Worksheet[], json: string | undefined, 
 
 // PO validation rows supplied by the user (poJson, or a tab with Purchase Number and Quantity). Values are kept
 // exactly as supplied; problems are reported, never fixed.
-function loadPo(sheets: ExcelScript.Worksheet[], json: string | undefined): PoData {
+function loadPo(wb: ExcelScript.Workbook, sheets: string[], json: string | undefined): PoData {
   const out: PoData = { source: "", rows: [], problems: [] };
   let raw: Raw[][] = [];
   if (json) {
@@ -1096,9 +1108,10 @@ function loadPo(sheets: ExcelScript.Worksheet[], json: string | undefined): PoDa
     };
     raw = parsed.map(o => Object.keys(PO_COLS).map(f => pick(o, PO_COLS[f])));
     out.source = "the PO data supplied in the chat (poJson)";
-  } else if (sheets.length) {
-    const ws = sheets[0], values = readValues(ws), h = bestHeader(values, PO_COLS);
-    out.source = `tab '${ws.getName()}'`;
+  } else if (sheets.length && wb.getWorksheet(sheets[0])) {
+    const ws = wb.getWorksheet(sheets[0]) as ExcelScript.Worksheet;
+    const values = readValues(ws), h = bestHeader(values, PO_COLS);
+    out.source = `tab '${sheets[0]}'`;
     // Rows up to the first empty row (the POs Validated sheet has the reconciliation section below)
     for (let i = h.row + 1; i < values.length && values[i].some(v => String(v).trim()); i++) {
       raw.push(Object.keys(PO_COLS).map(f => h.pos[f] === undefined ? "" : values[i][h.pos[f]]));
@@ -1999,7 +2012,7 @@ interface TableOpts {
   widths: number[]; wrap?: number[]; pct?: number[]; bars?: number[]; change?: number[]; num?: number[]; freeze?: boolean;
   text?: number[]; date?: number[]; datetime?: number[]; count?: number[]; diff?: number[]; blankRow?: boolean;
 }
-const TABLES: { n: number; last: ExcelScript.Table | null } = { n: 0, last: null };
+const TABLES = { n: 0 };
 // Writes a formatted Excel table with its header at 0-based row `row`; returns the next free row. A name starting
 // with "tbl" is used as it is (the monthly process's fixed table names); others get a unique suffix.
 function addTable(ws: ExcelScript.Worksheet, row: number, name: string, header: string[], rows: Cell[][], opts: TableOpts): number {
@@ -2013,7 +2026,6 @@ function addTable(ws: ExcelScript.Worksheet, row: number, name: string, header: 
   putValues(ws, row + 1, 0, body);
   const table = ws.addTable(ws.getRangeByIndexes(row, 0, body.length + 1, header.length), true);
   TABLES.n++;
-  TABLES.last = rows.length ? table : null;
   table.setName(/^tbl/.test(name) ? name : `t${name}${TABLES.n}`);
   table.setPredefinedTableStyle("TableStyleMedium15");
   if (opts.freeze) { ws.getFreezePanes().freezeRows(row + 1); }
@@ -2025,7 +2037,8 @@ function addTable(ws: ExcelScript.Worksheet, row: number, name: string, header: 
   (opts.num || []).forEach(c => ws.getRangeByIndexes(row + 1, c, body.length, 1).setNumberFormat("#,##0.0"));
   (opts.bars || []).forEach(c => {
     const cf = ws.getRangeByIndexes(row + 1, c, body.length, 1).addConditionalFormat(ExcelScript.ConditionalFormatType.dataBar);
-    cf.getDataBar().getPositiveFormat().setFillColor("#F4B6B6");
+    const bar = cf.getDataBar();
+    if (bar) { bar.getPositiveFormat().setFillColor("#F4B6B6"); }
   });
   // Red = worse (more issues), green = better: a colour number format (conditional font colours fail on the web)
   (opts.change || []).forEach(c => ws.getRangeByIndexes(row + 1, c, body.length, 1).setNumberFormat("[Red]+#,##0.0;[Color10]-#,##0.0;0"));
@@ -2488,7 +2501,6 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
     a.assetId.localeCompare(b.assetId)).map(a => newAssetRow(a));
   addTable(ws, 3, "tblNewAssets", NEW_HEADER, newRows, { widths: widths13, text: [0, 1, 6, 9], date: [5], datetime: [7, 10, 12],
     count: [8, 11], freeze: true });
-  const tNew = TABLES.last;
 
   // --- Removed Assets / tblRemovedAssets (only when there are any)
   if (rc.removed.length) {
@@ -2526,7 +2538,6 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
     c.transition, c.cur.assetClass, c.cur.model, dateSerial(c.cur.purchase), c.cur.po, dateSerial(c.cur.lastSeen), c.cur.functionUnit,
     dateSerial(c.cur.created), dateSerial(c.cur.updated)]), { widths: [110, 110, 110, 120, 200, 110, 150, 95, 110, 120, 100, 120, 120],
     text: [0, 1, 8, 10], date: [7], datetime: [9, 11, 12], freeze: true });
-  const tChanges = TABLES.last;
 
   // --- POs Validated / tblPOValidated + reconciliation section
   ws = newSheet(wb, PO_SHEET, `POs Validated - ${curName}`, ctx.po.source ? `Supplied by the user (${ctx.po.source}); values kept exactly as ` +
@@ -2534,7 +2545,6 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
     "(or give them to the agent) and run again. Nothing here is ever filled in automatically.");
   let r = addTable(ws, 3, "tblPOValidated", PO_HEADERS, ctx.po.rows.map(p => [p.date, p.number, p.model, p.quantity, p.raisedBy, p.physical, p.spider]),
     { widths: [110, 150, 150, 90, 130, 150, 130], text: [1], date: [0], count: [3], blankRow: true });
-  const tPo = TABLES.last;
   r = sectionTitle(ws, r, "PO reconciliation", "Quantity Variance = User-Provided Quantity - Export Asset Count (new assets this month)");
   const poRows = poReconRows(ctx);
   r = addTable(ws, r, "tblPOReconciliation", PO_RECON_HEADER, poRows, { widths: [150, 150, 90, 100, 90, 150, 130, 190], text: [0],
@@ -2613,12 +2623,16 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
   r = addTable(ws, r, "tblNewByPOFilled", ["PurchaseNo", "New Assets"], by(a => a.po ? "Populated" : "Blank"), { widths: [200, 100], count: [1] });
 
   // PivotTables (refreshed by being rebuilt every run). Skipped for an empty source table.
-  const pivot = (name: string, table: ExcelScript.Table | null, n: number, dest: string, rowsBy: string[], value: string, sum: boolean) => {
+  // The source table is looked up by name (Office Scripts does not allow keeping Excel objects in variables for later)
+  const pivot = (name: string, tableName: string, n: number, dest: string, rowsBy: string[], value: string, sum: boolean) => {
+    const table = wb.getTable(tableName);
     if (!table || !n) { notes.push(`${name} not created - its table is empty`); return; }
     try {
       const pt = ws.addPivotTable(name, table, ws.getRange(dest));
-      rowsBy.forEach(h => pt.addRowHierarchy(pt.getHierarchy(h)));
-      const dh = pt.addDataHierarchy(pt.getHierarchy(value));
+      rowsBy.forEach(h => { const hier = pt.getHierarchy(h); if (hier) { pt.addRowHierarchy(hier); } });
+      const valueHier = pt.getHierarchy(value);
+      if (!valueHier) { notes.push(`${name}: column '${value}' not found`); return; }
+      const dh = pt.addDataHierarchy(valueHier);
       dh.setSummarizeBy(sum ? ExcelScript.AggregationFunction.sum : ExcelScript.AggregationFunction.count);
       notes.push(`${name} created on ${SUMMARY_SHEET}!${dest}`);
     } catch (e) {
@@ -2626,9 +2640,9 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
     }
   };
   putValues(ws, 2, 7, [["PivotTables"]]);
-  pivot("NewAssetsPivot", tNew, newRows.length, "H4", ["Asset Type"], "Asset no.", false);
-  pivot("StatusChangesPivot", tChanges, rc.operational.length, "K4", ["Current Asset Status", "Asset Type", "Model"], "Asset no.", false);
-  pivot("POValidationsPivot", tPo, ctx.po.rows.length, "O4", ["Purchase Number", "Model"], "Quantity", true);
+  pivot("NewAssetsPivot", "tblNewAssets", newRows.length, "H4", ["Asset Type"], "Asset no.", false);
+  pivot("StatusChangesPivot", "tblStatusChanges", rc.operational.length, "K4", ["Current Asset Status", "Asset Type", "Model"], "Asset no.", false);
+  pivot("POValidationsPivot", "tblPOValidated", ctx.po.rows.length, "O4", ["Purchase Number", "Model"], "Quantity", true);
 
   // --- Quality Checks
   ws = newSheet(wb, "Quality Checks", `Quality Checks - ${curName}`, "Every control must pass (or be reviewed) before the monthly report is final");
