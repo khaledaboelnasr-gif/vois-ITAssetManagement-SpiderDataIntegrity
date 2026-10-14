@@ -96,6 +96,12 @@ cp ../reference_extract_officescript.ts extract.ts && npx tsc --noEmit --strict 
 
 All three must type-check with no errors (strict, no `any`).
 
+Then run the Office Scripts rules that `tsc` does not check. Array method callbacks must be inline arrow functions, and explicit `any` is not allowed:
+
+```bash
+node lint_officescript.mjs ../asset_audit_officescript.ts ../history_store_officescript.ts ../reference_extract_officescript.ts
+```
+
 ## Data rules
 
 - Real VCAMS, HR and Intune exports contain personal data. **Never commit them, and never paste them into chat.**

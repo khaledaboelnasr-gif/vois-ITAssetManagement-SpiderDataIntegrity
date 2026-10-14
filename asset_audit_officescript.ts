@@ -189,7 +189,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.14.3";
+const SCRIPT_VERSION = "2026.10.14.4";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -1359,9 +1359,9 @@ function reconcile(ctx: Ctx, cur: AssetLoad, prevLoad: AssetLoad | null, prevAss
     (rc.unknownStatuses.get(a.status || "(blank)") || 0) + 1));
   prevAssets.concat(curAssets).filter(a => a.group === UNLISTED).forEach(a => rc.unlistedTypes.set(a.assetClass,
     (rc.unlistedTypes.get(a.assetClass) || 0) + 1));
-  const order = (x: StatusChange, y: StatusChange) => x.cur.status.localeCompare(y.cur.status) || x.cur.assetClass.localeCompare(y.cur.assetClass) ||
-    x.cur.assetId.localeCompare(y.cur.assetId);
-  rc.operational.sort(order);
+  // Office Scripts only accept inline arrow functions as array callbacks (not a named comparator)
+  rc.operational.sort((x, y) => x.cur.status.localeCompare(y.cur.status) || x.cur.assetClass.localeCompare(y.cur.assetClass) ||
+    x.cur.assetId.localeCompare(y.cur.assetId));
   rc.serialChanges.sort((x, y) => x.change.localeCompare(y.change) || x.cur.assetClass.localeCompare(y.cur.assetClass) ||
     x.cur.assetId.localeCompare(y.cur.assetId));
   return rc;
