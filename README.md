@@ -93,7 +93,7 @@ cd test
 npm install
 # 1. Microsoft's official Office Scripts types (test/excelscript-official.d.ts, from OfficeDev/office-scripts-docs-reference)
 for f in asset_audit history_store reference_extract; do
-  cp ../${f}_officescript.ts check.ts && npx tsc --noEmit --strict --target es2017 --lib es2017 check.ts excelscript-official.d.ts
+  cp ../${f}_officescript.ts check.ts && npx tsc --noEmit --strict --target es2017 --lib es2017 check.ts excelscript-official.d.ts officescript-globals.d.ts
 done
 # 2. Office Scripts rules that TypeScript does not check
 node lint_officescript.mjs ../asset_audit_officescript.ts ../history_store_officescript.ts ../reference_extract_officescript.ts

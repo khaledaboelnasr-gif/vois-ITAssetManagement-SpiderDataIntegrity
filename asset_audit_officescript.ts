@@ -37,6 +37,8 @@
 function main(workbook: ExcelScript.Workbook, auditDate?: string, previousDate?: string, historyJson?: string,
   marketFilter?: string, focus?: string, shareSafe?: boolean, mappingsJson?: string, usersJson?: string,
   devicesJson?: string, poJson?: string, previousSnapshot?: string, returnSnapshot?: boolean): AuditResult {
+  CLOCK.start = 0;
+  progress("Started (script " + SCRIPT_VERSION + ")");
   const asOf = (auditDate ? parseDate(auditDate) : null) || utcToday();
   const period = monthOf(asOf);
   const maps = loadMappings(workbook, mappingsJson);
@@ -46,8 +48,11 @@ function main(workbook: ExcelScript.Workbook, auditDate?: string, previousDate?:
       "number column and a status or asset type column.");
   }
   const roles = splitExports(workbook, tabs.assets, maps);
+  progress(`Reading the current export (${roles.cur.join(", ")})`);
   const cur = loadAssets(workbook, roles.cur, maps);
+  progress(`Current export read: ${cur.rows} rows`);
   const prevLoad = roles.prev.length ? loadAssets(workbook, roles.prev, maps) : null;
+  if (prevLoad) { progress(`Previous export read (${roles.prev.join(", ")}): ${prevLoad.rows} rows`); }
   const reconciling = !!prevLoad || !!previousSnapshot;
   if (reconciling) {
     [cur].concat(prevLoad ? [prevLoad] : []).forEach((l, i) => {
@@ -89,10 +94,12 @@ function main(workbook: ExcelScript.Workbook, auditDate?: string, previousDate?:
     ctx.recon = reconcile(ctx, cur, prevLoad, prevAssets, assets, prevLoad ? "previous export tab " +
       roles.prev.map(n => `'${n}'`).join(", ") : "snapshot from the previous run", prevPeriod);
   }
+  progress("Comparison with the previous month done");
   ctx.deploySource = ctx.recon.available ? "status changes into In operation since the previous export (exact)" :
     cur.cols.has("deployDate") ? "deployment date (last 90 days / 3)" : cur.cols.has("statusDate") ?
       "status date of in-use assets (last 90 days / 3)" : "";
   runChecks(ctx);
+  progress("Data checks done");
   ctx.orphans = devices.list.filter(d => !d.matched && (!marketFilter || !d.market ||
     d.market.toLowerCase() === marketFilter.toLowerCase()));
   // Masking runs after the checks and the reconciliation, so matching uses the real values
@@ -137,7 +144,9 @@ function main(workbook: ExcelScript.Workbook, auditDate?: string, previousDate?:
       ". The mapping is not stored. Raw export and reference tabs removed." :
       "Off - real values shown; share with the requester and the service team only"]
   ];
+  progress("Writing the result sheets");
   buildWorkbook(workbook, ctx);
+  progress("Result sheets written");
   if (shareSafe) {
     roles.cur.concat(roles.prev, tabs.users, tabs.devices).forEach(n => {
       const w = workbook.getWorksheet(n);
@@ -161,6 +170,12 @@ function main(workbook: ExcelScript.Workbook, auditDate?: string, previousDate?:
     historyRows: current,
     snapshot
   };
+}
+// Progress in the Output tab: seconds since the start and what the script is doing
+const CLOCK = { start: 0 };
+function progress(text: string): void {
+  if (!CLOCK.start) { CLOCK.start = Date.now(); }
+  console.log(`${((Date.now() - CLOCK.start) / 1000).toFixed(0)} s - ${text}`);
 }
 function loadText(l: AssetLoad): string {
   return `${l.rows} data rows; ${l.unique} unique asset numbers; ${l.blankIds} rows without an asset number; ` +
@@ -192,7 +207,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.14.5";
+const SCRIPT_VERSION = "2026.10.14.6";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -780,7 +795,9 @@ function readBlock(ws: ExcelScript.Worksheet, r0: number, c0: number, rows: numb
   const first = Math.min(rows, 200);
   const sample = ws.getRangeByIndexes(r0, c0, first, cols).getValues() as Raw[][];
   sample.forEach(r => out.push(r));
-  const bytes = sample.reduce((s: number, r) => s + r.reduce((t: number, v) => t + String(v).length + 8, 0), 0) / Math.max(1, sample.length);
+  let total = 0;
+  sample.forEach(r => r.forEach(v => { total += String(v).length + 8; }));
+  const bytes = total / Math.max(1, sample.length);
   const chunk = Math.max(200, Math.min(20000, Math.floor(READ_BYTES / Math.max(1, bytes))));
   for (let i = first; i < rows; i += chunk) {
     const part = ws.getRangeByIndexes(r0 + i, c0, Math.min(chunk, rows - i), cols).getValues() as Raw[][];
@@ -2098,6 +2115,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
   }
 
   // --- 1 Start Here
+  progress("Writing Start Here");
   let ws = newSheet(wb, "Start Here", "VCAMS Asset Audit - " + date, `Markets: ${marketScope} | ${assets.length} asset records`);
   let r = textRows(ws, 3, [
     ["How to use this workbook", ""],
@@ -2142,6 +2160,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
     ["Glossary", "What each check means, why it matters, how to fix it"]], { widths: [190, 900], wrap: [1] });
 
   // --- 2 Executive Summary
+  progress("Writing Executive Summary");
   ws = newSheet(wb, "Executive Summary", "Executive Summary - " + date,
     "Integrity score = in-scope (not disposed) records with no completeness, validity, uniqueness, consistency or timeliness issue");
   r = 3;
@@ -2174,6 +2193,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
     buildFindings(ctx).map(f => [f.sev, f.text, f.impact, f.action, f.owner]), { widths: [70, 380, 280, 330, 160], wrap: [1, 2, 3] });
 
   // --- 3 Monthly KPIs
+  progress("Writing Monthly KPIs");
   ws = newSheet(wb, "Monthly KPIs", "Monthly KPIs - " + date,
     prevAny ? "Previous = each market's last audit in History" : "No previous audit in History - this audit is the baseline");
   const nowList = kpiList(kNow, ctx), prevList = kpiList(kPrev, ctx);
@@ -2193,6 +2213,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
   textRows(ws, r, [["Note", "Change for percentages is in percentage points. Counts compare with each market's previous audit."]]);
 
   // --- 4 Integrity Score
+  progress("Writing Integrity Score");
   ws = newSheet(wb, "Integrity Score", "Integrity Score - " + date, "Share of in-scope records with no issue in each dimension (higher is better)");
   const dimRow = (label: string, list: Asset[]): Cell[] => [label, list.length, ratio(list.filter(a => !dataIssues(a).length).length, list.length)]
     .concat(ALL_DIMS.map(d => ratio(list.filter(a => !a.flags.some(f => FLAG_INFO[f.code].dim === d)).length, list.length)));
@@ -2215,6 +2236,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
   }
 
   // --- 5 Exceptions
+  progress("Writing Exceptions");
   ws = newSheet(wb, "Exceptions", "Exceptions - " + date, "One row per problem on an asset, most severe first. Filter by Market, Location, Managed By or Check and hand out.");
   const exc: Cell[][] = [];
   assets.forEach(a => a.flags.forEach(f => {
@@ -2229,6 +2251,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
     { widths: [65, 230, 95, 260, 260, 130].concat(ASSET_WIDTHS), freeze: true });
 
   // --- 6 Duplicates
+  progress("Writing Duplicates");
   ws = newSheet(wb, "Duplicates", "Duplicates - " + date, "Records (not disposed) that share an identifier. Keep one record per physical asset.");
   const dupRows: Cell[][] = ctx.dupGroups.sort((a, b) => b.assets.length - a.assets.length).map(g => [g.on, g.value, g.assets.length,
     g.assets.map(a => a.key).join(", "), Array.from(new Set<string>(g.assets.map(a => a.market))).join(", "),
@@ -2237,6 +2260,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
     { widths: [90, 150, 65, 260, 140, 200, 260, 220], wrap: [3, 5, 6, 7], freeze: true });
 
   // --- 7 Users & Leavers
+  progress("Writing Users & Leavers");
   ws = newSheet(wb, "Users & Leavers", "Users & Leavers - " + date, ctx.users.source ? `User directory: ${ctx.users.source}` :
     "No user directory supplied: add a Users tab (HR / Entra ID export) or usersJson to find assets held by leavers");
   r = sectionTitle(ws, 3, "Assets held by users who have left");
@@ -2253,6 +2277,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
     .sort((a, b) => (b[1] as number) - (a[1] as number)), { widths: [240, 65, 300, 140], wrap: [2] });
 
   // --- 8 Reconciliation
+  progress("Writing Reconciliation");
   ws = newSheet(wb, "Reconciliation", "Reconciliation with device management - " + date, ctx.devices.source ? `Devices: ${ctx.devices.source} ` +
     `(${ctx.devices.list.length} devices; ${ctx.devices.list.filter(d => d.matched).length} matched to VCAMS)` :
     "No device-management export supplied: add an Intune / SCCM tab or devicesJson. Last-seen checks use the export's own 'Last Seen' column if it has one.");
@@ -2272,6 +2297,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
     .sort((a, b) => (a[3] === "" ? 1e9 : a[3] as number) - (b[3] === "" ? 1e9 : b[3] as number)).slice(0, 20000), { widths: [150, 140, 90, 70, 220, 120] });
 
   // --- 9 Stock & Utilisation
+  progress("Writing Stock & Utilisation");
   ws = newSheet(wb, "Stock & Utilisation", "Stock & Utilisation - " + date, `Utilisation = in use / (in use + in stock). ` +
     `Stock age from ${ctx.stockAgeSource || "(not available)"}; deployments from ${ctx.deploySource || "(not available)"}. ` +
     `Cover = in stock / deployments per month.`);
@@ -2310,6 +2336,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
     }), { widths: [150, 70, 70, 70, 90, 90] });
 
   // --- 10 Lifecycle
+  progress("Writing Lifecycle");
   ws = newSheet(wb, "Lifecycle", "Lifecycle - " + date, "Expected life (years): " +
     Object.keys(LIFECYCLE_YEARS).map(c => `${c} ${ctx.maps.lifecycle.get(compactKey(c)) || LIFECYCLE_YEARS[c]}`).join(", ") + " (tune with Mappings, Kind 'Lifecycle')");
   const inUse = assets.filter(a => a.stage === IN_USE);
@@ -2338,6 +2365,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
   }), { widths: [120, 65, 65, 65, 65, 65, 65, 65, 70] });
 
   // --- 11 Since Last Audit
+  progress("Writing Since Last Audit");
   ws = newSheet(wb, "Since Last Audit", "Since Last Audit - " + date, prevAny ? "Previous = each market's last audit in History (" +
     ctx.markets.map(m => `${m}: ${ctx.prevOf.get(m) || "none"}`).join("; ") + ")" : "No previous audit in History - this audit is the baseline");
   const checkRows = (market: string): Cell[][] => {
@@ -2358,6 +2386,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
   });
 
   // --- 12 Inventory Overview
+  progress("Writing Inventory Overview");
   ws = newSheet(wb, "Inventory Overview", "Inventory Overview - " + date, "What is in VCAMS and how the script read it");
   r = sectionTitle(ws, 3, "Assets by market and stage");
   r = addTable(ws, r, "StageMarket", ["Market"].concat(STAGES, ["Total"]), ctx.markets.map(m => {
@@ -2400,6 +2429,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
     { widths: [100, 200, 70, 70, 600], wrap: [4] });
 
   // --- 13 Physical Check
+  progress("Writing Physical Check");
   const ph = ctx.physical;
   if (ph.sample.length) {
     ws = newSheet(wb, PHYSICAL_SHEET, "Physical Check - " + date, physicalText(ph) ||
@@ -2418,6 +2448,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
   }
 
   // --- 14 All Assets
+  progress("Writing All Assets");
   // Big exports: not listed again (the raw export tab has every asset and Exceptions every problem); keeps the run fast
   const listed = assets.length > SETTINGS.allAssetsMax ? [] : assets;
   ws = newSheet(wb, "All Assets", "All Assets - " + date, listed.length < assets.length ?
@@ -2430,6 +2461,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
     { widths: ASSET_WIDTHS.concat([110, 95, 95, 120, 110, 65, 70, 500]), text: [0, 5, 6, 13], date: [14, 15], datetime: [16], freeze: true });
 
   // --- 15 Glossary
+  progress("Writing Glossary");
   ws = newSheet(wb, "Glossary", "Glossary", "What each check means and how to tune the script");
   r = addTable(ws, 3, "Checks", ["Check Code", "Check", "Dimension", "Severity", "Why It Matters", "How to Fix", "Owner", "Needs"],
     Object.keys(FLAG_INFO).map(c => [c, FLAG_INFO[c].name, FLAG_INFO[c].dim, FLAG_INFO[c].sev, FLAG_INFO[c].why, FLAG_INFO[c].fix, FLAG_INFO[c].owner,
@@ -2495,6 +2527,7 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
   const widths13 = [110, 110, 110, 110, 150, 95, 110, 120, 80, 100, 120, 80, 120];
 
   // --- New Assets / tblNewAssets
+  progress("Writing New Assets");
   let ws = newSheet(wb, "New Assets", `New Assets - ${curName}`, `In the ${curName} export but not in the ${prevName} export ` +
     `(matched on Asset no.): ${rc.newAssets.length}. ${rc.newAssets.filter(a => !a.po).length} have a blank PurchaseNo.`);
   const newRows = rc.newAssets.slice().sort((a, b) => a.assetClass.localeCompare(b.assetClass) || a.po.localeCompare(b.po) ||
@@ -2503,6 +2536,7 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
     count: [8, 11], freeze: true });
 
   // --- Removed Assets / tblRemovedAssets (only when there are any)
+  progress("Writing Removed Assets");
   if (rc.removed.length) {
     ws = newSheet(wb, "Removed Assets", `Removed Assets - ${curName}`, `In the ${prevName} export but missing from the ${curName} ` +
       `export: ${rc.removed.length}. Not automatically scrapped - each needs review.`);
@@ -2516,6 +2550,7 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
   }
 
   // --- Serial Number Changes / tblSerialChanges
+  progress("Writing Serial Number Changes");
   if (rc.serialChecked) {
     ws = newSheet(wb, "Serial Number Changes", `Serial Number Changes - ${curName}`, `Assets in both exports whose Serial no. differs ` +
       `from ${prevName} (case, spaces and punctuation ignored; placeholders such as N/A count as blank): ${rc.serialChanges.length}. ` +
@@ -2530,6 +2565,7 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
   }
 
   // --- Scrap & Inactive Assets / tblStatusChanges
+  progress("Writing Scrap & Inactive Assets");
   const scrapped = rc.operational.filter(c => compactKey(c.cur.status) === "scrapped").length;
   ws = newSheet(wb, "Scrap & Inactive Assets", `Scrap & Inactive Assets - ${curName}`, `Assets whose status changed to ` +
     `${OPERATIONAL_STATUSES.join(" or ")} since ${prevName}: ${rc.operational.length} (Scrapped ${scrapped}, Lost ` +
@@ -2540,6 +2576,7 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
     text: [0, 1, 8, 10], date: [7], datetime: [9, 11, 12], freeze: true });
 
   // --- POs Validated / tblPOValidated + reconciliation section
+  progress("Writing POs Validated");
   ws = newSheet(wb, PO_SHEET, `POs Validated - ${curName}`, ctx.po.source ? `Supplied by the user (${ctx.po.source}); values kept exactly as ` +
     "supplied. Edit the table and run the script again to re-check." : "No PO validation supplied yet. Type the user's rows into this table " +
     "(or give them to the agent) and run again. Nothing here is ever filled in automatically.");
@@ -2559,6 +2596,7 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
   if (flags.length) { r = sectionTitle(ws, r, "Flags for manual review"); r = textRows(ws, r, flags); }
 
   // --- Pivot & Summary
+  progress("Writing Pivot & Summary");
   ws = newSheet(wb, SUMMARY_SHEET, `Monthly Asset Summary - ${prevName} vs ${curName}`, ctx.formulas && ctx.prevTabs.length === 1 &&
     ctx.curTabs.length === 1 ? "Counts are live formulas on the raw export tabs; 'Check' compares them with the script's count" :
     "Counts calculated by the script");
@@ -2645,6 +2683,7 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
   pivot("POValidationsPivot", "tblPOValidated", ctx.po.rows.length, "O4", ["Purchase Number", "Model"], "Quantity", true);
 
   // --- Quality Checks
+  progress("Writing Quality Checks");
   ws = newSheet(wb, "Quality Checks", `Quality Checks - ${curName}`, "Every control must pass (or be reviewed) before the monthly report is final");
   r = addTable(ws, 3, "tblQualityChecks", ["Check", "Expected", "Actual", "Result"], qualityChecks(ctx), { widths: [480, 110, 110, 80] });
   r = sectionTitle(ws, r, "Completion report");
