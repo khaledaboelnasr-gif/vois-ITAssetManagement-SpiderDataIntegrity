@@ -37,6 +37,19 @@
 function main(workbook: ExcelScript.Workbook, auditDate?: string, previousDate?: string, historyJson?: string,
   marketFilter?: string, focus?: string, shareSafe?: boolean, mappingsJson?: string, usersJson?: string,
   devicesJson?: string, poJson?: string, previousSnapshot?: string, returnSnapshot?: boolean): AuditResult {
+  // Excel recalculates every formula after each write; with 200,000 rows that makes the run much slower. Pause it
+  // while the script runs and put the user's setting back at the end (also when the run fails).
+  const calcMode = workbook.getApplication().getCalculationMode();
+  workbook.getApplication().setCalculationMode(ExcelScript.CalculationMode.manual);
+  try {
+    return runAudit(workbook, auditDate, previousDate, historyJson, marketFilter, focus, shareSafe, mappingsJson, usersJson, devicesJson, poJson, previousSnapshot, returnSnapshot);
+  } finally {
+    workbook.getApplication().setCalculationMode(calcMode);
+  }
+}
+function runAudit(workbook: ExcelScript.Workbook, auditDate?: string, previousDate?: string, historyJson?: string,
+  marketFilter?: string, focus?: string, shareSafe?: boolean, mappingsJson?: string, usersJson?: string,
+  devicesJson?: string, poJson?: string, previousSnapshot?: string, returnSnapshot?: boolean): AuditResult {
   CLOCK.start = 0;
   progress("Started (script " + SCRIPT_VERSION + ")");
   const asOf = (auditDate ? parseDate(auditDate) : null) || utcToday();
@@ -207,7 +220,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.14.6";
+const SCRIPT_VERSION = "2026.10.14.7";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -788,8 +801,9 @@ function monthName(period: string): string {
 // ============================================================================ loading
 // Reads a block in row chunks sized from a sample, so each response stays far below the ~5 MB limit even for
 // exports of 100,000+ rows
-const READ_BYTES = 2000000;
-function readBlock(ws: ExcelScript.Worksheet, r0: number, c0: number, rows: number, cols: number): Raw[][] {
+// Each read is one round trip to Excel, so read as much as safely fits in one response (~5 MB limit)
+const READ_BYTES = 3000000, READ_MAX_ROWS = 110000;
+function readBlock(ws: ExcelScript.Worksheet, r0: number, c0: number, rows: number, cols: number, label?: string): Raw[][] {
   const out: Raw[][] = [];
   if (rows < 1 || cols < 1) { return out; }
   const first = Math.min(rows, 200);
@@ -798,10 +812,11 @@ function readBlock(ws: ExcelScript.Worksheet, r0: number, c0: number, rows: numb
   let total = 0;
   sample.forEach(r => r.forEach(v => { total += String(v).length + 8; }));
   const bytes = total / Math.max(1, sample.length);
-  const chunk = Math.max(200, Math.min(20000, Math.floor(READ_BYTES / Math.max(1, bytes))));
+  const chunk = Math.max(200, Math.min(READ_MAX_ROWS, Math.floor(READ_BYTES / Math.max(1, bytes))));
   for (let i = first; i < rows; i += chunk) {
     const part = ws.getRangeByIndexes(r0 + i, c0, Math.min(chunk, rows - i), cols).getValues() as Raw[][];
     part.forEach(r => out.push(r));
+    if (label && rows > 5000) { progress(`${label}: ${Math.min(rows, i + chunk).toLocaleString("en-US")} of ${rows.toLocaleString("en-US")} rows`); }
   }
   return out;
 }
@@ -964,15 +979,19 @@ function loadAssets(wb: ExcelScript.Workbook, sheets: string[], maps: Mappings):
     let c0 = Math.min(...fields.map(f => h.pos[f]));
     const c1 = Math.max(...fields.map(f => h.pos[f]));
     let values: Raw[][];
+    progress(`'${sheetName}': ${n.toLocaleString("en-US")} rows x ${used.getColumnCount()} columns; reading the ${fields.length} columns the audit uses`);
     if (c1 - c0 + 1 > 1.5 * fields.length) {
       const pos: Record<string, number> = {};
-      const cols = fields.map((f, i) => { pos[f] = i; return readBlock(ws, top, used.getColumnIndex() + h.pos[f], n, 1); });
+      const cols = fields.map((f, i) => {
+        pos[f] = i;
+        return readBlock(ws, top, used.getColumnIndex() + h.pos[f], n, 1, `'${sheetName}' column ${i + 1} of ${fields.length} (${STANDARD_HEADER[f] || f})`);
+      });
       values = [];
       for (let i = 0; i < n; i++) { values.push(cols.map(c => c[i] ? c[i][0] : "")); }
       Object.keys(pos).forEach(f => { h.pos[f] = pos[f]; });
       c0 = 0;
     } else {
-      values = readBlock(ws, top, used.getColumnIndex() + c0, n, c1 - c0 + 1);
+      values = readBlock(ws, top, used.getColumnIndex() + c0, n, c1 - c0 + 1, `'${sheetName}'`);
     }
     out.tabs.push({ name: ws.getName(), headerAbs: top - 1, lastAbs: top + n - 1, colAbs, rows: n });
     const at = (r: Raw[], f: string): Raw => h.pos[f] === undefined ? "" : r[h.pos[f] - c0];

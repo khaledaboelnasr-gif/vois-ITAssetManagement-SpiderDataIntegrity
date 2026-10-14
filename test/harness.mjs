@@ -55,6 +55,7 @@ const tabName = n => process.env.TABNAMES ? ({ [PREV_TAB]: "previous month expor
 const wb = { sheets: Object.keys(data).filter(n => !drop(n)).map(n => wrap(new Sheet(tabName(n), pad(data[n])))),
   tableNames: new Set(),
   getWorksheets() { return this.sheets; }, getWorksheet(n) { return this.sheets.find(s => s.name === n); },
+  getApplication() { return wrap({ getCalculationMode: () => "automatic", setCalculationMode() {} }); },
   getTable(n) { return this.tableNames.has(String(n).toLowerCase()) ? wrap({ getName: () => n }) : undefined; },
   addWorksheet(n) { if (this.getWorksheet(n)) throw new Error("dup sheet " + n); const s = wrap(new Sheet(n)); this.sheets.push(s); return s; } };
 // REFJSON=1: compact JSON like reference_extract_officescript.ts produces
@@ -66,6 +67,7 @@ const load = () => new Function("ExcelScript", js + "\nreturn { main };")(ExcelS
 let snapshot;
 if (process.env.SNAPSHOT) {
   const pwb = { sheets: [wrap(new Sheet(PREV_TAB, pad(data[PREV_TAB])))], tableNames: new Set(), getWorksheets() { return this.sheets; },
+    getApplication() { return wrap({ getCalculationMode: () => "automatic", setCalculationMode() {} }); }, getTable() { return undefined; },
     getWorksheet(n) { return this.sheets.find(s => s.name === n); }, addWorksheet(n) { const s = wrap(new Sheet(n)); this.sheets.push(s); return s; } };
   snapshot = load()(pwb, "2026-09-08", undefined, undefined, undefined, undefined, false, undefined, undefined, undefined, undefined, undefined, true).snapshot;
   console.log("snapshot chars", snapshot.length);
