@@ -1,0 +1,19 @@
+# Real asset, HR and device data contains PII - never commit
+*.xlsx
+*.xls
+*.csv
+data/
+real/
+test/synthetic.json
+
+node_modules/
+__pycache__/
+test/script.ts
+test/store.ts
+test/extract.ts
+test/agent_input.md
+test/package-lock.json
+test/big.json
+test/wide.json
+test/minimal.json
+test/hist*.json

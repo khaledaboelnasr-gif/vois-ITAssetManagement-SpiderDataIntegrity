@@ -1,0 +1,153 @@
+VOIS ASSET AUDIT SCRIPT - OVERVIEW
+Script version 2026.10.14.2
+====================================================================
+
+Use this to review the script and ask for changes. To ask for a change,
+name the tab and section, for example:
+  "In Stock & Utilisation > By market, add ..."  or  "Add a status to the list".
+
+
+1. WHAT THE SCRIPT DOES WHEN YOU RUN IT
+--------------------------------------------------------------------
+
+1) Reads the exports
+   - Finds the VCAMS export tabs by their headers.
+   - Accepts different column names, ignoring case and spaces, e.g. "Asset no." or "Asset Number".
+   - Tells the previous export from the current one by the tab name ("Previous" / "Current", or the date in the
+     name). Otherwise the older data is the previous export.
+   - The raw tabs are never changed.
+
+2) Reconciles the two months (matched on Asset no. only)
+   - New assets, removed assets, and every status change.
+   - The operational list: assets that became Scrapped or Lost this month.
+   - The PO validation you supply, reconciled against the new assets. Nothing is filled in or approved
+     automatically.
+
+3) Audits the current export
+   - Completeness, validity, duplicates, consistency and timeliness of every record.
+   - With a user directory: assets held by people who have left.
+   - With an Intune / SCCM export: devices missing from device management, and devices online although VCAMS says
+     they are scrapped, in stock or lost.
+
+4) Measures stock and lifecycle
+   - Utilisation, stock age, deployments per month, months of cover, idle stock, and where to move stock before
+     buying.
+   - Over-age and out-of-warranty assets, and the refresh forecast.
+
+5) Compares with the previous audit (from the saved History) and writes a text summary for the Copilot agent.
+
+
+2. WHAT YOU GET - THE TABS, IN ORDER
+--------------------------------------------------------------------
+
+1) START HERE
+   - How to use the workbook, and the run information: tabs read, columns found, references used.
+
+2) EXECUTIVE SUMMARY
+   - The monthly reconciliation (completion report).
+   - The quality checks that did not pass.
+   - The headline per market and the findings: what we found, impact, action, owner.
+
+3) MONTHLY KPIs
+   - Every KPI for the monthly report: this audit, the previous one, the change, and per market.
+
+4) PIVOT & SUMMARY
+   - Assets by type: previous month, difference, this month.
+   - High value / Low value / Other totals and the grand total, as live formulas with a check column.
+   - Status changes by transition.
+   - New assets by type, PO and model.
+   - The PivotTables NewAssetsPivot, StatusChangesPivot and POValidationsPivot.
+
+5) NEW ASSETS (tblNewAssets)
+   - Every new asset, with the 13 standard columns.
+
+6) REMOVED ASSETS (tblRemovedAssets)
+   - Only shown when there are any. Each one needs review; none is assumed scrapped.
+
+7) SCRAP & INACTIVE ASSETS (tblStatusChanges)
+   - Assets whose status changed to Scrapped or Lost this month.
+
+8) POs VALIDATED (tblPOValidated)
+   - Your PO rows, exactly as supplied.
+   - The PO reconciliation: export count, your quantity, the variance, and the result.
+   - The flags for manual review.
+
+9) QUALITY CHECKS
+   - Every control (Pass / Review / Fail) and the completion report.
+
+10) INTEGRITY SCORE
+   - The share of clean records by market, data-quality dimension, asset type, site and team.
+
+11) EXCEPTIONS
+   - The work list: one row per problem, most severe first, with the fix and the owner.
+
+12) DUPLICATES
+   - Records sharing an asset no., serial, tag, hostname or MAC.
+
+13) USERS & LEAVERS
+   - Assets held by leavers, users holding too many devices, and users not in the directory.
+
+14) RECONCILIATION
+   - VCAMS compared with Intune / SCCM: not seen, stale, online but not in use, a different user, and devices
+     missing from VCAMS.
+
+15) STOCK & UTILISATION
+   - By market and type, and by site.
+   - Stock moves to make before buying.
+   - In-stock models.
+   - Stock by status (in repair / on order).
+
+16) LIFECYCLE
+   - The refresh forecast (overdue, due in 0-3, 4-6 and 7-12 months) and the age profile.
+
+17) SINCE LAST AUDIT
+   - Each check this audit compared with the previous one, per market.
+
+18) INVENTORY OVERVIEW
+   - Counts by stage, type and market.
+   - How each VCAMS status and type was read.
+   - Top models.
+   - Names written several ways.
+
+19) PHYSICAL CHECK
+   - A random sample to verify on site. Type Y/N in the yellow columns and run the script again to get the result.
+
+20) ALL ASSETS
+   - Every record with its problems. Above 20,000 assets it is not repeated; use the raw tab.
+
+21) GLOSSARY
+   - Every check (why it matters, how to fix it, what it needs), the controlled statuses and types, and the Mappings.
+
+
+3. THE CONTROLLED LISTS
+--------------------------------------------------------------------
+Statuses and how the audit reads them (any other status is flagged for review):
+
+   In operation                                         in use
+   In stock, Reserved, Ready for use, To install,
+     Building                                           stock
+   Ordered                                              on order
+   Disabled, Authorised inactive                        inactive
+   Scrapped, Marketed                                   scrapped / disposed
+   Lost                                                 lost
+
+Asset types (any other type is shown as "Unlisted" and flagged):
+
+   High value   Notebook, Desktop, Monitor, Zubehör-Client, Headset
+   Low value    Bag, Mouse, Mobile, Keyboard
+   Other        IP Phone, VC Device, Display unit, Printer, Wireless sharing device, Connectors, Scanner,
+                External Drive, Virtual Machine
+
+
+4. SETTINGS THAT ARE EASY TO CHANGE (Mappings: Setting | name | value)
+--------------------------------------------------------------------
+   - Not physically verified: 365 days
+   - Not seen (last scan): over 45 days
+   - Online but scrapped / in stock: seen in the last 30 days, after the status change
+   - Aged stock: over 180 days in stock
+   - In repair too long: 30 days; ordered / in transit too long: 60 days
+   - Overstocked: over 3 months of cover; low stock: under half a month
+   - Process-wide problem: on more than 25% of records
+   - Expected life: Notebook 4 years, Desktop 5, Monitor 7, Mobile 3, Headset 3 (Mappings: Lifecycle)
+   - Devices per user: 1 notebook, 1 desktop, 1 mobile (Mappings: Limit)
+   - Physical Check sample: 50 assets
