@@ -8,6 +8,7 @@ The workbook covers:
 - **Monthly reconciliation:** the previous and current exports compared on Asset no., giving:
   - new assets;
   - removed assets;
+  - serial number changes;
   - status changes;
   - the operational list of assets that became **Scrapped** or **Lost**;
   - the user-supplied **PO validation** and the PO reconciliation;

@@ -43,6 +43,7 @@ PRESENT (from the brief only)
    - Previous total, current total, net movement.
    - New assets by type and by PO; new assets with a blank PurchaseNo.
    - Removed assets: say they need review; they are NOT assumed scrapped.
+   - Serial number changes (changed / added / removed), by asset type.
    - Total status changes, Scrapped, Lost, and other changes excluded from the operational list.
    - PO results per PO (export count, supplied quantity, variance, result).
    - Missing or pending validations.

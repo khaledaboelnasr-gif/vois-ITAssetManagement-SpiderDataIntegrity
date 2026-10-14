@@ -49,6 +49,7 @@ The spec is the "Monthly Asset Reconciliation Copilot Agent" instructions, writt
 | 8. Status normalisation | `VCAMS_STATUSES` (the 12 controlled statuses). Spacing and case are normalised for the comparison only; unknown statuses are kept and flagged. |
 | 9. New assets | `New Assets` / `tblNewAssets`; blank PurchaseNo flagged (`NEW_NO_PO`); summaries by type, PO, model, blank / populated. |
 | 10. Removed assets | `Removed Assets` / `tblRemovedAssets` (only when there are any), "Review required"; never treated as scrapped. |
+| *(Team's workbook tab, not in the spec)* Serial Number Changes | `Serial Number Changes` / `tblSerialChanges`: assets in both exports whose serial was changed, added or removed. Case, spaces and punctuation are ignored, and placeholders such as N/A count as blank. Needs the previous export tab (the snapshot has no serials). |
 | 11–12. Status comparison, Scrapped / Lost list | All changes are counted; `Scrap & Inactive Assets` / `tblStatusChanges` holds only genuine changes ending in Scrapped or Lost. The other changes are reported as excluded (transition table on Pivot & Summary). |
 | 13–14. PO validation and reconciliation | `POs Validated` / `tblPOValidated`, holding user data only (poJson or a PO tab), plus the PO reconciliation (8 columns, the 6 approved results) and the flags. Nothing is inferred or approved by the script. |
 | 15. Monthly summary | `Pivot & Summary`: every listed type (even when zero), High / Low value / Other totals, grand total. Live `SUMPRODUCT` formulas on the raw tabs, with a Check column against the script's count. |
@@ -72,7 +73,17 @@ The spec is the "Monthly Asset Reconciliation Copilot Agent" instructions, writt
   | Scrapped / Disposed | Scrapped, Marketed |
   | Lost | Lost |
 
-  *To confirm, see the open questions below.*
+  Meanings confirmed by the asset team (2026-10-14):
+  - **Marketed:** donated to charity.
+  - **Building:** being prepared.
+  - **Disabled:** no network connection for more than 90 days, so VCAMS disables it.
+  - **Authorised inactive:** the user is on long leave and keeps the asset.
+  - **Ordered:** on order.
+
+  Because of the 90-day Disabled rule, "not seen" (STALE_DEVICE) is 90 days. An *In operation* asset not scanned for longer should have been disabled.
+- **Market** comes from the **Legal Entity** column. "VE" is Egypt (VOIS EG). Other entity codes are shown as they are until a Mappings row names them (`Market | <code> | <label>`, matching the whole value).
+- **Data sources: Spider export only** (decision 2026-10-14). No HR, Entra or Intune data, so the leaver and device-management checks stay off. "Last scan" from the export drives the last-seen checks.
+- **Previous month:** normally both exports in one workbook. The snapshot is only the fallback when a user uploads the current export alone.
 - **Asset types** come from the spec's lists.
   - High value: Notebook, Desktop, Monitor, Zubehör-Client, Headset.
   - Low value: Bag, Mouse, Mobile, Keyboard.
@@ -93,6 +104,7 @@ The spec is the "Monthly Asset Reconciliation Copilot Agent" instructions, writt
 
 ## Status (2026-10-14)
 
+- **Engine 2026.10.14.3:** adds the Serial Number Changes sheet (the team's existing tab), the Legal Entity "VE" market, 90-day "not seen", and the team's tab names ("previous month export" / "this month export").
 - **Engine 2026.10.14.2:** monthly reconciliation and the integrity audit, stock utilisation and lifecycle, KPIs and trend, PivotTables, quality checks, agent brief, snapshot in and out, share-safe tokens.
 - **History store 2026.10.14:** History, Runs (with integrity score) and Mappings tables, append-only, newest complete run per month and market.
 - **Reference extract:** Users and Devices workbooks to compact JSON.
@@ -107,19 +119,15 @@ The spec is the "Monthly Asset Reconciliation Copilot Agent" instructions, writt
   The history harness passes too.
 - **Not yet run in Excel on the web.** The next step is a run on the real September / October workbook.
 
-## Open questions (please confirm)
+## Open questions
 
-1. **Status meanings.**
-   - Is **Marketed** = sold / remarketed (counted as disposed)?
-   - Is **Building** = being prepared (in stock)?
-   - Are **Disabled** and **Authorised inactive** "not in use, but still held"?
-   - Correct any of these with a Mappings row (`Status | Marketed | <stage>`).
-2. **Extra columns.** Does the VCAMS export have assigned user / email, hostname, location, company / market, or cost center? They switch on the user, leaver, location and per-market checks. With only the 13 standard columns, the market is "(no market)".
-3. **Market.** Which column tells EG / IN / EU apart, if any? Is it Function Unit?
-4. **Date format** in the export. The script reads Excel dates, ISO, `dd-mmm-yyyy`, and day-first `d/m/yyyy`.
-5. **Last scan.** Is this the Spider inventory agent's scan? It drives "not seen" and "online but scrapped" when no Intune export is given.
-6. **References.** Can the team get an HR / Entra leavers export and an Intune / SCCM device export each month? They enable leaver and device-management reconciliation.
-7. **Monthly report format.** Is anything in the current monthly report not covered by Pivot & Summary, Monthly KPIs and the completion report?
+Answered on 2026-10-14 in the build tracker: status meanings, market (Legal Entity), previous-month method, data sources (Spider only), and the monthly report tabs.
+
+Still open:
+
+1. **Extra columns.** Which columns does the export have beyond the 13 standard ones (assigned user / email, hostname, location, cost center)? They switch on the user and location checks. Tracker step 0.2 has no header list yet.
+2. **Other Legal Entity codes.** What are the codes for IN and the EU markets? "VE" is mapped; add the others as Mappings rows.
+3. **Date format** in the export. The script reads Excel dates, ISO, `dd-mmm-yyyy`, and day-first `d/m/yyyy`.
 
 ## Next steps
 

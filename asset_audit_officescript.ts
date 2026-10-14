@@ -167,7 +167,8 @@ function loadText(l: AssetLoad): string {
 // ============================================================================ settings
 const SETTINGS: Record<string, number> = {
   notVerifiedDays: 365,     // in use / in stock and not physically verified for this many days -> NOT_VERIFIED
-  staleSeenDays: 45,        // in use but last scanned / seen longer ago than this -> STALE_DEVICE
+  staleSeenDays: 90,        // in use but last scanned / seen longer ago than this -> STALE_DEVICE (VCAMS sets Disabled
+                            // after 90 days without a network connection, so an "In operation" asset past 90 days was missed)
   recentSeenDays: 30,       // stock / inactive / scrapped / lost but seen within this many days -> ONLINE_NOT_IN_USE
   stockAgedDays: 180,       // in stock longer than this -> LONG_IN_STOCK (and "aged stock" in Stock & Utilisation)
   repairMaxDays: 30,        // in repair longer than this -> LONG_IN_REPAIR
@@ -188,7 +189,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.14.2";
+const SCRIPT_VERSION = "2026.10.14.3";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -196,7 +197,9 @@ const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/
 const IN_USE = "In Use", STOCK = "In Stock", REPAIR = "In Repair", TRANSIT = "On Order / In Transit", INACTIVE = "Inactive",
   RETIRED = "Retired", LOST = "Lost", DISPOSED = "Scrapped / Disposed", UNKNOWN = "Unknown status";
 const STAGES = [IN_USE, STOCK, REPAIR, TRANSIT, INACTIVE, RETIRED, LOST, DISPOSED, UNKNOWN];
-// The VCAMS controlled statuses, in the capitalisation the reports use, and the stage each one means.
+// The VCAMS controlled statuses, in the capitalisation the reports use, and the stage each one means (confirmed by the
+// asset team 2026-10-14): Marketed = donated to charity; Building = being prepared; Disabled = no network connection for
+// more than 90 days; Authorised inactive = the user is on long leave and keeps the asset; Ordered = on order.
 // Any other status is flagged for review (and read with STAGE_RULES so it still counts somewhere).
 const VCAMS_STATUSES: [string, string][] = [
   ["In operation", IN_USE], ["In stock", STOCK], ["Ordered", TRANSIT], ["Reserved", STOCK], ["Ready for use", STOCK],
@@ -273,10 +276,12 @@ const LIFECYCLE_YEARS: Record<string, number> = {
 };
 
 const MARKET_MAP: [string, string][] = [
-  ["india", "VOIS IN"], ["egypt", "VOIS EG"], ["romania", "VOIS EU - Romania"], ["albania", "VOIS EU - Albania"],
+  ["^ve$", "VOIS EG"], ["india", "VOIS IN"], ["egypt", "VOIS EG"], ["romania", "VOIS EU - Romania"], ["albania", "VOIS EU - Albania"],
   ["hungary", "VOIS EU - Hungary"], ["spain", "VOIS EU - Spain"], ["turk", "VOIS EU - Turkey"], ["czech", "VOIS EU - Czech"],
   ["portugal", "VOIS EU - Portugal"], ["ireland", "VOIS EU - Ireland"], ["germany", "VOIS EU - Germany"], ["\\buk\\b", "VOIS UK"]
 ];
+// Matched on the company / Legal Entity value (lower case, punctuation as spaces). Legal Entity "VE" = Egypt.
+// Add other entity codes with Mappings rows: Market | <code> | <market label> (matches the whole value).
 // Manufacturer spellings -> one name (only for the "written several ways" report and model checks)
 const MAKE_RULES: [string, RegExp][] = [
   ["HP", /hewlett|^hp\b|^hpe?\b|hp inc/], ["Dell", /^dell/], ["Lenovo", /lenovo/], ["Apple", /apple/],
@@ -535,9 +540,11 @@ interface Physical {
 interface PoRow { date: Cell; number: string; model: string; quantity: Cell; raisedBy: string; physical: string; spider: string; problems: string[]; }
 interface PoData { source: string; rows: PoRow[]; problems: string[]; }
 interface StatusChange { cur: Asset; prev: Asset; transition: string; }
+interface SerialChange { cur: Asset; prev: Asset; change: string; }
 interface Recon {
   available: boolean; source: string; prevPeriod: string; curPeriod: string; prevRows: number; curRows: number;
   prevUnique: number; curUnique: number; prevBlank: number; curBlank: number; prevDup: string[]; curDup: string[];
+  serialChanges: SerialChange[]; serialChecked: boolean;
   prevByType: Map<string, number>; curByType: Map<string, number>; newAssets: Asset[]; removed: Asset[]; existing: number;
   changes: StatusChange[]; operational: StatusChange[]; unknownStatuses: Map<string, number>; unlistedTypes: Map<string, number>;
   fromSnapshot: boolean;
@@ -552,7 +559,7 @@ interface Ctx {
 interface Kpis {
   records: number; inScope: number; stages: Record<string, number>; issues: number; high: number; score: Cell;
   util: Cell; dup: number; stockAged: number; deployed: number; cover: Cell; newAssets: number; removed: number; changes: number;
-  scrapped: number; lost: number; checks: Map<string, number>;
+  serialChanges: number; scrapped: number; lost: number; checks: Map<string, number>;
 }
 interface AuditResult {
   auditDate: string; period: string; previousPeriod: string; assets: number; inScope: number; markets: string[];
@@ -642,7 +649,7 @@ function parseDate(v: Raw): Date | null {
   return null;
 }
 function marketOf(company: string, maps: Mappings): string {
-  const c = (company || "").toLowerCase();
+  const c = norm(company);
   for (const [key, label] of maps.market.concat(MARKET_MAP)) {
     if (new RegExp(key).test(c)) { return label; }
   }
@@ -1169,7 +1176,7 @@ function loadMappings(wb: ExcelScript.Workbook, json: string | undefined): Mappi
         ASSET_COLS[x].some(nm => headerKey(nm) === headerKey(value)));
       if (f && to) { maps.columns.set(f, headerKey(to)); maps.applied++; } else { maps.problems.push(`${line}: unknown field or no column name`); }
     } else if (kind === "market") {
-      if (to) { maps.market.push([norm(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), to]); maps.applied++; }
+      if (to) { maps.market.push(["^" + norm(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$", to]); maps.applied++; }
     } else if (kind === "setting") {
       if (SETTINGS[value] !== undefined && isFinite(num) && to !== "") { SETTINGS[value] = num; maps.applied++; }
       else { maps.problems.push(`${line}: unknown setting or not a number`); }
@@ -1296,15 +1303,22 @@ const DUP_CODES: Record<string, string> = { "Asset no.": "DUP_ASSET_ID", "Serial
 // ============================================================================ monthly reconciliation
 function emptyRecon(): Recon {
   return { available: false, source: "", prevPeriod: "", curPeriod: "", prevRows: 0, curRows: 0, prevUnique: 0, curUnique: 0,
-    prevBlank: 0, curBlank: 0, prevDup: [], curDup: [], prevByType: new Map<string, number>(), curByType: new Map<string, number>(),
+    prevBlank: 0, curBlank: 0, prevDup: [], curDup: [], serialChanges: [], serialChecked: false, prevByType: new Map<string, number>(), curByType: new Map<string, number>(),
     newAssets: [], removed: [], existing: 0, changes: [], operational: [], unknownStatuses: new Map<string, number>(),
     unlistedTypes: new Map<string, number>(), fromSnapshot: false };
+}
+const SERIAL_ADDED = "Serial added (was blank or a placeholder)", SERIAL_REMOVED = "Serial removed (now blank or a placeholder)",
+  SERIAL_CHANGED = "Serial changed";
+// Serial as compared month to month: case, spaces and punctuation ignored; placeholders ("N/A", "0") count as blank
+function serialCompare(s: string): string {
+  return isPlaceholder(s) ? "" : serialKey(s);
 }
 // Previous vs current export on Asset no. (trimmed, case-insensitive). Never by row, serial, model or PO.
 function reconcile(ctx: Ctx, cur: AssetLoad, prevLoad: AssetLoad | null, prevAssets: Asset[], curAssets: Asset[],
   source: string, prevPeriod: string): Recon {
   const rc = emptyRecon();
   rc.available = true; rc.source = source; rc.prevPeriod = prevPeriod; rc.curPeriod = ctx.period; rc.fromSnapshot = !prevLoad;
+  rc.serialChecked = !!prevLoad && prevLoad.cols.has("serial") && cur.cols.has("serial");
   const index = (list: Asset[]) => {
     const m = new Map<string, Asset>();
     list.forEach(a => { const k = idKey(a.assetId); if (k && !m.has(k)) { m.set(k, a); } });
@@ -1332,6 +1346,10 @@ function reconcile(ctx: Ctx, cur: AssetLoad, prevLoad: AssetLoad | null, prevAss
       rc.changes.push(ch);
       if (OPERATIONAL_STATUSES.some(s => compactKey(s) === compactKey(a.status))) { rc.operational.push(ch); }
     }
+    // Serial number changes (the snapshot has no serials, so only with the previous export tab)
+    if (rc.serialChecked && serialCompare(p.serial) !== serialCompare(a.serial)) {
+      rc.serialChanges.push({ cur: a, prev: p, change: !serialCompare(p.serial) ? SERIAL_ADDED : !serialCompare(a.serial) ? SERIAL_REMOVED : SERIAL_CHANGED });
+    }
     // Deployed this month: moved into use from any other stage
     if (a.stage === IN_USE && p.stage !== IN_USE) { a.deployedNow = true; }
   });
@@ -1344,6 +1362,8 @@ function reconcile(ctx: Ctx, cur: AssetLoad, prevLoad: AssetLoad | null, prevAss
   const order = (x: StatusChange, y: StatusChange) => x.cur.status.localeCompare(y.cur.status) || x.cur.assetClass.localeCompare(y.cur.assetClass) ||
     x.cur.assetId.localeCompare(y.cur.assetId);
   rc.operational.sort(order);
+  rc.serialChanges.sort((x, y) => x.change.localeCompare(y.change) || x.cur.assetClass.localeCompare(y.cur.assetClass) ||
+    x.cur.assetId.localeCompare(y.cur.assetId));
   return rc;
 }
 // [check, expected, actual, result] - the controls the monthly process requires before reporting completion
@@ -1366,6 +1386,16 @@ function qualityChecks(ctx: Ctx): Cell[][] {
   const badOps = rc.operational.filter(c => !c.prev || compactKey(c.prev.status) === compactKey(c.cur.status) ||
     !OPERATIONAL_STATUSES.some(s => compactKey(s) === compactKey(c.cur.status))).length;
   check("Every Scrap & Inactive row: in both exports, a real change, now Scrapped or Lost", 0, badOps, badOps === 0);
+  if (rc.serialChecked) {
+    const ids = new Set<string>(rc.serialChanges.map(c => idKey(c.cur.assetId)));
+    const bad = rc.serialChanges.filter(c => !c.prev || serialCompare(c.prev.serial) === serialCompare(c.cur.serial)).length;
+    check("Every Serial Number Changes row: in both exports, a real serial change", 0, bad, bad === 0);
+    check("Serial number changes listed once per asset", rc.serialChanges.length, ids.size, ids.size === rc.serialChanges.length);
+    const blanked = rc.serialChanges.filter(c => c.change === SERIAL_REMOVED).length;
+    check("Serial numbers removed (now blank or a placeholder)", 0, blanked, blanked === 0, true);
+  } else {
+    check("Serial number changes checked", "Yes", rc.fromSnapshot ? "No - the snapshot has no serials" : "No - Serial no. column missing", false, true);
+  }
   check("Operational + excluded status changes = all status changes", rc.changes.length,
     rc.operational.length + (rc.changes.length - rc.operational.length), true);
   const byPo = countBy(rc.newAssets.map(a => a.po || ""));
@@ -1432,6 +1462,9 @@ function reconText(ctx: Ctx): string[] {
     `Total status changes: ${rc.changes.length}`,
     `Scrapped (new this month): ${scrapped}; Lost (new this month): ${lost}`,
     `Other status changes excluded from the operational table: ${rc.changes.length - rc.operational.length}`,
+    rc.serialChecked ? `Serial number changes: ${rc.serialChanges.length}` + (rc.serialChanges.length ? ` (${mapList(countBy(rc.serialChanges.map(c => c.change)), 3)}; ` +
+      `by type: ${mapList(countBy(rc.serialChanges.map(c => c.cur.assetClass)), 5)})` : "") :
+      "Serial number changes: not checked (" + (rc.fromSnapshot ? "previous month came from the snapshot, which has no serials" : "no Serial no. column") + ")",
     `PO validation records processed: ${ctx.po.rows.length}` + (ctx.po.source ? ` (${ctx.po.source})` : " (none supplied)"),
     "PO export count vs supplied quantity: " + (po.length ? po.map(r => `${r[0] || "(blank PO)"}: export ${r[2]}, supplied ${r[3] === "" ? "-" : r[3]}, ` +
       `variance ${r[4] === "" ? "-" : signed(r[4] as number)} - ${r[7]}`).join("; ") : "no new-asset POs"),
@@ -1696,6 +1729,7 @@ function historyFromAssets(ctx: Ctx): HistoryRow[] {
     add("#new", list.filter(a => a.isNew).length);
     const ch = list.filter(a => a.prev && compactKey(a.prev.status) !== compactKey(a.status));
     add("#changes", ch.length);
+    add("#serialchanges", list.filter(a => a.prev && ctx.recon.serialChecked && serialCompare(a.prev.serial) !== serialCompare(a.serial)).length);
     add("#scrapped", ch.filter(a => compactKey(a.status) === "scrapped").length);
     add("#lost", ch.filter(a => compactKey(a.status) === "lost").length);
     list.forEach(a => a.flags.forEach(f => add(f.code, 1)));
@@ -1747,7 +1781,7 @@ function kpiValues(m: Map<string, number>): Kpis {
     records: g("#records"), inScope: g("#inscope"), stages, issues: g("#issues"), high: g("#high"),
     score: g("#inscope") ? 1 - g("#issues") / g("#inscope") : "", util: ratio(use, use + stock), dup: g("#dup"), stockAged: g("#stockaged"),
     deployed: g("#deployed"), cover: coverMonths(stock, g("#deployed")), newAssets: g("#new"), removed: g("#removed"),
-    changes: g("#changes"), scrapped: g("#scrapped"), lost: g("#lost"), checks
+    changes: g("#changes"), serialChanges: g("#serialchanges"), scrapped: g("#scrapped"), lost: g("#lost"), checks
   };
 }
 // The monthly KPI list: [KPI, value, kind] where kind says how to show and compare it
@@ -1758,6 +1792,7 @@ function kpiList(k: Kpis, ctx: Ctx): [string, Cell, string][] {
   if (ctx.recon.available) {
     list.push(["New assets since the previous export", k.newAssets, "n"], ["Removed since the previous export (review)", k.removed, "bad"],
       ["Status changes since the previous export", k.changes, "n"], ["Newly Scrapped", k.scrapped, "n"], ["Newly Lost", k.lost, "bad"],
+      ["Serial number changes", k.serialChanges, "n"],
       ["New assets with a blank PurchaseNo", c("NEW_NO_PO"), "bad"], ["Back from scrapped / lost", c("STATUS_REVERSED"), "bad"]);
   }
   STAGES.filter(s => s !== UNKNOWN).forEach(s => list.push([s, k.stages[s], "n"]));
@@ -1916,7 +1951,7 @@ function buildFindings(ctx: Ctx): Finding[] {
 // ============================================================================ workbook output
 const BRAND = "#E60000", DARK = "#333333", GREY = "#595959";
 const SHEETS = ["Start Here", "Executive Summary", "Monthly KPIs", "Pivot & Summary", "New Assets", "Removed Assets",
-  "Scrap & Inactive Assets", "POs Validated", "Quality Checks", "Integrity Score", "Exceptions", "Duplicates",
+  "Serial Number Changes", "Scrap & Inactive Assets", "POs Validated", "Quality Checks", "Integrity Score", "Exceptions", "Duplicates",
   "Users & Leavers", "Reconciliation", "Stock & Utilisation", "Lifecycle", "Since Last Audit", "Inventory Overview",
   "Physical Check", "All Assets", "Glossary"];
 
@@ -2035,7 +2070,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
   // PivotTables point at the reconciliation tables: remove their sheet first so the tables can be rebuilt
   const oldSummary = wb.getWorksheet(SUMMARY_SHEET);
   if (oldSummary) { oldSummary.delete(); }
-  const reconSheets = ["New Assets", "Removed Assets", "Scrap & Inactive Assets", "Quality Checks"];
+  const reconSheets = ["New Assets", "Removed Assets", "Serial Number Changes", "Scrap & Inactive Assets", "Quality Checks"];
   if (ctx.recon.available) {
     const notes = buildReconSheets(wb, ctx);
     if (notes.length) { ctx.runInfo.push(["PivotTables and formulas", notes.join("; ")]); }
@@ -2056,7 +2091,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
     ["1.", "Executive Summary and Monthly KPIs give the headline for the monthly report. Quality Checks must all pass " +
       "(or be reviewed) before the report is final."],
     ["", "Monthly reconciliation: Pivot & Summary (counts by type, High / Low value / Other), New Assets, Removed Assets, " +
-      "Scrap & Inactive Assets (new Scrapped / Lost only), POs Validated (your PO data + PO reconciliation)."],
+      "Serial Number Changes, Scrap & Inactive Assets (new Scrapped / Lost only), POs Validated (your PO data + PO reconciliation)."],
     ["2.", "Exceptions is the work list: one row per problem on an asset, with the fix and the owner. Filter by market, " +
       "location or Managed By and hand it out."],
     ["3.", "Stock & Utilisation shows idle and aged stock, months of cover and where to move stock before buying."],
@@ -2076,6 +2111,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
       "status changes; new assets by type / PO / model; NewAssetsPivot, StatusChangesPivot, POValidationsPivot"],
     ["New Assets", "tblNewAssets: in the current export but not in the previous one (Asset no.)"],
     ["Removed Assets", "tblRemovedAssets: in the previous export but missing now - review required (only when there are any)"],
+    ["Serial Number Changes", "tblSerialChanges: assets in both exports whose serial number was added, changed or removed"],
     ["Scrap & Inactive Assets", "tblStatusChanges: assets whose status changed to Scrapped or Lost this month"],
     ["POs Validated", "tblPOValidated (user-supplied, never invented) and the PO reconciliation against new assets"],
     ["Quality Checks", "The reconciliation controls (Pass / Review / Fail) and the completion report"],
@@ -2467,6 +2503,20 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
     if (old) { old.delete(); }
   }
 
+  // --- Serial Number Changes / tblSerialChanges
+  if (rc.serialChecked) {
+    ws = newSheet(wb, "Serial Number Changes", `Serial Number Changes - ${curName}`, `Assets in both exports whose Serial no. differs ` +
+      `from ${prevName} (case, spaces and punctuation ignored; placeholders such as N/A count as blank): ${rc.serialChanges.length}. ` +
+      mapList(countBy(rc.serialChanges.map(c => c.change)), 3));
+    addTable(ws, 3, "tblSerialChanges", ["Asset no.", "Previous Serial no.", "Current Serial no.", "Change", "Asset status", "Asset Type",
+      "Model", "PurchaseNo", "Function Unit", "AssetUpdateDate"], rc.serialChanges.map(c => [c.cur.assetId, c.prev.serial, c.cur.serial,
+      c.change, c.cur.status, c.cur.assetClass, c.cur.model, c.cur.po, c.cur.functionUnit, dateSerial(c.cur.updated)]),
+    { widths: [110, 130, 130, 170, 110, 110, 150, 110, 100, 120], text: [0, 1, 2, 7, 8], datetime: [9], freeze: true });
+  } else {
+    const old = wb.getWorksheet("Serial Number Changes");
+    if (old) { old.delete(); }
+  }
+
   // --- Scrap & Inactive Assets / tblStatusChanges
   const scrapped = rc.operational.filter(c => compactKey(c.cur.status) === "scrapped").length;
   ws = newSheet(wb, "Scrap & Inactive Assets", `Scrap & Inactive Assets - ${curName}`, `Assets whose status changed to ` +
@@ -2642,6 +2692,11 @@ function buildAgentInput(ctx: Ctx): string {
     L.push("Status changes by transition (only those ending in Scrapped or Lost are operational):",
       mdTable(["Status change", "Assets", "Operational"], keysByCount(tr).slice(0, 25).map(t => [t, tr.get(t) || 0,
         OPERATIONAL_STATUSES.some(s => t.endsWith("→ " + s)) ? "Yes" : "Excluded"])), "");
+    if (rc.serialChanges.length) {
+      L.push("Serial number changes by type (full list on the Serial Number Changes tab):", mdTable(["Asset Type", "Serial added", "Serial changed", "Serial removed"],
+        keysByCount(countBy(rc.serialChanges.map(c => c.cur.assetClass))).map(t => [t as Cell].concat([SERIAL_ADDED, SERIAL_CHANGED, SERIAL_REMOVED]
+          .map(ch => rc.serialChanges.filter(c => c.cur.assetClass === t && c.change === ch).length)))), "");
+    }
     L.push("PO reconciliation (PO data is supplied by the user - never infer, invent or approve it):",
       mdTable(PO_RECON_HEADER, poReconRows(ctx)), ctx.po.problems.length ? "PO data to complete: " + ctx.po.problems.slice(0, 15).join("; ") : "", "");
   } else {

@@ -137,9 +137,9 @@ The condition is `endsWith(toLower(<ExportFile name>), '.xlsx')`.
 - Workbook: `AuditHistory.xlsx`. Script: `Scripts/history_store.osts`.
 - Inputs: `mode` = `read`, `months` = `13`, `market` = `<Market>`.
 
-### Step 6 (optional): previous-month snapshot → **Latest snapshot**
+### Step 6: previous-month snapshot (fallback) → **Latest snapshot**
 
-Use this only when users upload the current export alone.
+Build this step. It is used only when a user uploads the current export alone; with both exports in the workbook, the script ignores it. The snapshot has no serial numbers, so Serial Number Changes needs the previous export tab.
 
 1. **SharePoint, Get files (properties only)** in `Snapshots/` → **Snapshot files**: Order By `Created desc`, Top Count `24`.
 2. **Filter array** (Data Operations) → **Latest snapshot**:
@@ -151,7 +151,9 @@ Use this only when users upload the current export alone.
    - Expression for the script: `if(empty(body('Latest_snapshot')), '', base64ToString(body('Snapshot_content')?['$content']))`.
    - The script ignores the snapshot when the workbook already has a previous export tab.
 
-### Step 7 (optional): references → **Users ref**, **Devices ref**
+### Step 7 (not used for now): references → **Users ref**, **Devices ref**
+
+The team decided on 2026-10-14 to use the Spider export only. Skip this step and leave usersJson / devicesJson empty. Keep it here in case HR or Intune data is added later.
 
 Run `Scripts/reference_extract.osts`:
 

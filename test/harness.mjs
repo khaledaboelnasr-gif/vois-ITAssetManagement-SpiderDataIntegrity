@@ -4,7 +4,7 @@
 //      NOREF=1 (drop the Users and Intune tabs)  REFJSON=1 (pass them as usersJson / devicesJson instead of tabs)
 //      ONLYCUR=1 (drop the previous export)  SNAPSHOT=1 (previous month as a snapshot from an earlier run, not a tab)
 //      NOPO=1 (drop the PO tab)  POJSON=1 (pass the PO rows as poJson)  MARK=1 (fill the Physical Check sheet and re-run)
-//      HISTOUT=<file> (save historyRows)
+//      HISTOUT=<file> (save historyRows)  TABNAMES=1 (tabs named "previous month export" / "this month export")
 import { stripTypeScriptTypes } from "node:module";
 import fs from "node:fs";
 import assert from "node:assert/strict";
@@ -50,7 +50,9 @@ const refTabs = ["Users (Entra)", "Intune Devices"];
 const PREV_TAB = "2026-09 Previous Export", CUR_TAB = "2026-10 Current Export", PO_TAB = "PO Validation";
 const drop = n => ((process.env.NOREF || process.env.REFJSON) && refTabs.includes(n)) || ((process.env.ONLYCUR || process.env.SNAPSHOT) && n === PREV_TAB) ||
   ((process.env.NOPO || process.env.POJSON) && n === PO_TAB);
-const wb = { sheets: Object.keys(data).filter(n => !drop(n)).map(n => wrap(new Sheet(n, pad(data[n])))),
+// TABNAMES=1: the team's own tab names ("previous month export" / "this month export")
+const tabName = n => process.env.TABNAMES ? ({ [PREV_TAB]: "previous month export", [CUR_TAB]: "this month export" }[n] || n) : n;
+const wb = { sheets: Object.keys(data).filter(n => !drop(n)).map(n => wrap(new Sheet(tabName(n), pad(data[n])))),
   tableNames: new Set(),
   getWorksheets() { return this.sheets; }, getWorksheet(n) { return this.sheets.find(s => s.name === n); },
   addWorksheet(n) { if (this.getWorksheet(n)) throw new Error("dup sheet " + n); const s = wrap(new Sheet(n)); this.sheets.push(s); return s; } };

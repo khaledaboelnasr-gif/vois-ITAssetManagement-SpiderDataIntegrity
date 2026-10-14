@@ -1,5 +1,5 @@
 VOIS ASSET AUDIT SCRIPT - OVERVIEW
-Script version 2026.10.14.2
+Script version 2026.10.14.3
 ====================================================================
 
 Use this to review the script and ask for changes. To ask for a change,
@@ -64,6 +64,10 @@ name the tab and section, for example:
 6) REMOVED ASSETS (tblRemovedAssets)
    - Only shown when there are any. Each one needs review; none is assumed scrapped.
 
+6b) SERIAL NUMBER CHANGES (tblSerialChanges)
+   - Assets in both months whose serial number was changed, added or removed.
+   - Case and spacing differences are ignored, and "N/A" counts as blank.
+
 7) SCRAP & INACTIVE ASSETS (tblStatusChanges)
    - Assets whose status changed to Scrapped or Lost this month.
 
@@ -127,8 +131,9 @@ Statuses and how the audit reads them (any other status is flagged for review):
    In stock, Reserved, Ready for use, To install,
      Building                                           stock
    Ordered                                              on order
-   Disabled, Authorised inactive                        inactive
-   Scrapped, Marketed                                   scrapped / disposed
+   Disabled (no network for 90+ days),
+     Authorised inactive (user on long leave)           inactive
+   Scrapped, Marketed (donated to charity)              scrapped / disposed
    Lost                                                 lost
 
 Asset types (any other type is shown as "Unlisted" and flagged):
@@ -142,7 +147,7 @@ Asset types (any other type is shown as "Unlisted" and flagged):
 4. SETTINGS THAT ARE EASY TO CHANGE (Mappings: Setting | name | value)
 --------------------------------------------------------------------
    - Not physically verified: 365 days
-   - Not seen (last scan): over 45 days
+   - Not seen (last scan): over 90 days (the same as the VCAMS Disabled rule)
    - Online but scrapped / in stock: seen in the last 30 days, after the status change
    - Aged stock: over 180 days in stock
    - In repair too long: 30 days; ordered / in transit too long: 60 days

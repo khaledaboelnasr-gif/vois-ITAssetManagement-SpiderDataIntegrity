@@ -8,7 +8,8 @@ Writes {tab name: rows (header first)} for:
 --minimal keeps only the 13 standard VCAMS headers (no user, hostname, location or company columns).
 
 Planted, so every sheet has something to show (scaled with the asset count):
-  new Bags (most on PO 1600513572, some with a blank PurchaseNo), assets removed from the current export, status changes
+  new Bags (most on PO 1600513572, some with a blank PurchaseNo), assets removed from the current export, serial number
+  changes (changed, blanked, filled in, and a case-only difference that is not a change), status changes
   (some to Scrapped / Lost, most excluded), a scrapped asset back in operation, status spelling variants that are NOT
   changes (" Reserved ", "SCRAPPED"), unknown statuses, a duplicate asset number, placeholder serials, leavers,
   devices missing from Intune, a scrapped notebook still checking in, old idle stock.
@@ -105,6 +106,12 @@ for a in scr[:2]:  # back from the dead
 for a in scr[2:2 + 3 * k]:  # scrapped notebook still checking in after the change
     a["Last scan"] = CUR - timedelta(days=2)
 cur[5]["Asset status"] = "Awaiting Triage"; cur[6]["Asset status"] = "in operations"
+# serial number changes: corrected, filled in, blanked; plus a case/spacing-only difference that is NOT a change
+withsn = [a for a in cur if a["Serial no."] and a["Serial no."] not in ("N/A", "To be filled by O.E.M.", "0")]
+for a in withsn[100:100 + 6 * k]: a["Serial no."] = a["Serial no."][:-3] + "XYZ"
+for a in withsn[200:200 + 2 * k]: a["Serial no."] = ""
+for a in withsn[300:300 + 2 * k]: a["Serial no."] = a["Serial no."].lower() + " "
+for a in [x for x in cur if x["Serial no."] in ("N/A", "0")][:k]: a["Serial no."] = f"FIX{random.randint(10000, 99999)}"
 removed = set(a["Asset no."] for a in random.sample(cur, k=5 * k))
 cur = [a for a in cur if a["Asset no."] not in removed]
 # new bags: most on one PO, some with a blank PurchaseNo
