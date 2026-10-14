@@ -207,6 +207,7 @@ Workbook: the Id from **Save upload**. Script: `Scripts/asset_audit.osts`.
 2. **Send an email (V2)** to `<RequesterEmail>`.
    - Subject: `Asset audit @{body('Run_audit')?['result']?['period']} – @{outputs('MarketLabel')}`
    - Body: the link, then `join(body('Run_audit')?['result']?['reconciliation'], '<br>')`, then `join(body('Run_audit')?['result']?['qualityChecks'], '<br>')`.
+   - Optional: the ready-to-send monthly email is in `emailSubject` and `emailBody`, and the Copilot in PowerPoint prompt in `pptPrompt`. To show them in the email, use `replace(body('Run_audit')?['result']?['emailBody'], decodeUriComponent('%0A'), '<br>')`. They are also on the workbook's Monthly Email tab.
    - Attachment: the result content.
 3. **Delete file** in `Runs/`.
 

@@ -170,6 +170,7 @@ function runAudit(workbook: ExcelScript.Workbook, auditDate?: string, previousDa
   const k = kpiValues(metricsFor(current, ""));
   const flagCount = flagCounts(assets);
   const rc = ctx.recon;
+  const report = rc.available ? monthlyReport(ctx) : null;
   return {
     auditDate: fmtDay(asOf), period, previousPeriod: rc.available ? rc.prevPeriod : "", assets: assets.length, inScope: k.inScope,
     markets, reconciliation: rc.available ? reconText(ctx) : [], integrityScore: k.score === "" ? "" : pct(k.score as number, 1),
@@ -182,7 +183,10 @@ function runAudit(workbook: ExcelScript.Workbook, auditDate?: string, previousDa
     runInfo: ctx.runInfo.map(r => `${r[0]}: ${r[1]}`),
     agentInput: buildAgentInput(ctx),
     historyRows: current,
-    snapshot
+    snapshot,
+    emailSubject: report ? report.subject : "",
+    emailBody: report ? report.email.join("\n") : "",
+    pptPrompt: report ? report.ppt.join("\n") : ""
   };
 }
 // Progress in the Output tab: seconds since the start and what the script is doing
@@ -221,7 +225,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.14.9";
+const SCRIPT_VERSION = "2026.10.14.10";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -597,7 +601,7 @@ interface AuditResult {
   auditDate: string; period: string; previousPeriod: string; assets: number; inScope: number; markets: string[];
   reconciliation: string[]; integrityScore: string; recordsWithIssues: number; highSeverity: number; topChecks: string[];
   leaversHoldingAssets: number; stockUtilisation: string; qualityChecks: string[]; runInfo: string[]; agentInput: string;
-  historyRows: HistoryRow[]; snapshot: string;
+  historyRows: HistoryRow[]; snapshot: string; emailSubject: string; emailBody: string; pptPrompt: string;
 }
 
 // ============================================================================ helpers
@@ -1595,6 +1599,145 @@ function signed(n: number): string {
   return (n > 0 ? "+" : "") + n.toLocaleString("en-US");
 }
 
+// ============================================================================ monthly email and PowerPoint prompt
+// The monthly email holds only what the team already sends: totals, the summary by type, new / removed assets, serial
+// number changes, Scrapped / Lost, PO validation and the points to review. No names or emails.
+interface MonthlyReport { subject: string; email: string[]; heads: number[]; ppt: string[]; }
+const COPILOT_PROMPT_LIMIT = 2000;
+function fmtNum(n: number): string {
+  return n.toLocaleString("en-US");
+}
+function countText(m: Map<string, number>, n: number): string {
+  const keys = keysByCount(m);
+  return keys.slice(0, n).map(k => `${k} ${fmtNum(m.get(k) || 0)}`).join(", ") + (keys.length > n ? `, and ${keys.length - n} more` : "");
+}
+// Asset types of one value group, in the standard order: [type, previous, current]
+function typeRows(rc: Recon, group: string, maps: Mappings): [string, number, number][] {
+  const types = VCAMS_TYPES.filter(t => t[1] === group).map(t => t[0]);
+  if (group === UNLISTED) {
+    Array.from(rc.prevByType.keys()).concat(Array.from(rc.curByType.keys())).forEach(t => {
+      if (types.indexOf(t) < 0 && !TYPE_INDEX.has(compactKey(t)) && typeOf(t, "", maps).group === UNLISTED) { types.push(t); }
+    });
+  }
+  return types.map(t => [t, rc.prevByType.get(t) || 0, rc.curByType.get(t) || 0] as [string, number, number]);
+}
+function monthlyReport(ctx: Ctx): MonthlyReport {
+  const rc = ctx.recon, prevName = monthName(rc.prevPeriod), curName = monthName(rc.curPeriod);
+  const email: string[] = [], heads: number[] = [];
+  const head = (t: string) => { heads.push(email.length); email.push(t); };
+  const line = (t: string) => email.push(t);
+  const change = (p: number, c: number) => `${fmtNum(p)} → ${fmtNum(c)} (${signed(c - p)})`;
+  const scrapped = rc.operational.filter(c => compactKey(c.cur.status) === "scrapped");
+  const lost = rc.operational.filter(c => compactKey(c.cur.status) === "lost");
+  const blankPo = rc.newAssets.filter(a => !a.po).length;
+  const byPo = countBy(rc.newAssets.filter(a => a.po).map(a => a.po));
+  const po = poReconRows(ctx), open = openValidations(ctx);
+  const groups = VALUE_GROUPS.map(g => {
+    const rows = typeRows(rc, g, ctx.maps);
+    return { g, rows, p: rows.reduce((s, r) => s + r[1], 0), c: rows.reduce((s, r) => s + r[2], 0) };
+  }).filter(x => x.g !== UNLISTED || x.p || x.c);
+  const review: string[] = [];
+  if (rc.removed.length) { review.push(`${fmtNum(rc.removed.length)} removed assets to review (they are not treated as scrapped)`); }
+  if (blankPo) { review.push(`${fmtNum(blankPo)} new assets with a blank PurchaseNo`); }
+  if (open.length) { review.push(`PO validations missing or pending: ${open.length}`); }
+  po.filter(r => r[7] === PO_RESULTS.variance).forEach(r => review.push(`PO ${r[0]}: quantity variance ${signed(r[4] as number)}`));
+  if (rc.prevDup.length || rc.curDup.length) { review.push(`Duplicate asset numbers: ${rc.prevDup.length} last month, ${rc.curDup.length} this month`); }
+  if (rc.prevBlank || rc.curBlank) { review.push(`Rows without an asset number: ${rc.prevBlank} last month, ${rc.curBlank} this month`); }
+  if (rc.unknownStatuses.size) { review.push(`Statuses outside the standard list (both exports): ${countText(rc.unknownStatuses, 5)}`); }
+  if (rc.unlistedTypes.size) { review.push(`Asset types outside the standard list (both exports): ${countText(rc.unlistedTypes, 5)}`); }
+  const subject = `VCAMS Monthly Asset Reconciliation - ${curName}`;
+
+  line("Hello all,");
+  line("");
+  line(`Please find below the VCAMS monthly asset reconciliation for ${curName}, comparing the ${prevName} and ${curName} exports. ` +
+    "The detailed workbook is attached.");
+  line("");
+  head("1. Overview");
+  line(`• ${prevName} assets: ${fmtNum(rc.prevRows)}`);
+  line(`• ${curName} assets: ${fmtNum(rc.curRows)}`);
+  line(`• Net movement: ${signed(rc.curRows - rc.prevRows)}`);
+  line("");
+  head(`2. Asset summary by type (${prevName} → ${curName})`);
+  groups.forEach(x => {
+    line(`${x.g} assets: ${change(x.p, x.c)}`);
+    x.rows.forEach(r => line(`   • ${r[0]}: ${change(r[1], r[2])}`));
+  });
+  line(`Grand total: ${change(rc.prevRows, rc.curRows)}`);
+  line("");
+  head(`3. New assets: ${fmtNum(rc.newAssets.length)}`);
+  if (rc.newAssets.length) {
+    line(`• By type: ${countText(countBy(rc.newAssets.map(a => a.assetClass)), 10)}`);
+    line(`• By PO: ${byPo.size ? countText(byPo, 10) : "none"}`);
+    line(`• Blank PurchaseNo: ${fmtNum(blankPo)}`);
+  }
+  line("");
+  head(`4. Removed assets: ${fmtNum(rc.removed.length)}`);
+  if (rc.removed.length) {
+    line(`• By type: ${countText(countBy(rc.removed.map(a => a.assetClass)), 10)}`);
+    line("• In last month's export but not in this month's. Each needs review; they are not treated as scrapped.");
+  }
+  line("");
+  if (rc.serialChecked) {
+    head(`5. Serial number changes: ${fmtNum(rc.serialChanges.length)}`);
+    if (rc.serialChanges.length) {
+      line(`• ${countText(countBy(rc.serialChanges.map(c => c.change)), 3)}`);
+      line(`• By type: ${countText(countBy(rc.serialChanges.map(c => c.cur.assetClass)), 10)}`);
+    }
+  } else {
+    head("5. Serial number changes: not checked");
+    line(rc.fromSnapshot ? "• Last month came from the stored snapshot, which has no serial numbers." : "• The export has no Serial no. column.");
+  }
+  line("");
+  head(`6. Scrapped and lost assets: ${fmtNum(rc.operational.length)}`);
+  line(`• Scrapped: ${fmtNum(scrapped.length)}` + (scrapped.length ? ` (${countText(countBy(scrapped.map(c => c.cur.assetClass)), 8)})` : ""));
+  line(`• Lost: ${fmtNum(lost.length)}` + (lost.length ? ` (${countText(countBy(lost.map(c => c.cur.assetClass)), 8)})` : ""));
+  line(`• Other status changes (not in this list): ${fmtNum(rc.changes.length - rc.operational.length)}`);
+  line("");
+  head("7. PO validation");
+  if (!po.length) { line("• No new-asset POs this month."); }
+  // The model column of an unsupplied PO lists models with counts, e.g. "Bag (50)": the counts are dropped here
+  const model = (r: Cell[]) => String(r[1]).replace(/ \(\d+\)/g, "");
+  po.forEach(r => line(`• ${r[0] ? "PO " + r[0] + (model(r) ? " (" + model(r) + ")" : "") : "Blank PurchaseNo"}: ${fmtNum(r[2] as number)} in the export, ` +
+    (r[3] === "" ? "no quantity supplied" : `${fmtNum(r[3] as number)} supplied, variance ${signed(r[4] as number)}`) + ` - ${r[7]}`));
+  line(`• Missing or pending validations: ${open.length ? open.length : "none"}`);
+  line("");
+  head("8. Points for review");
+  if (review.length) { review.forEach(t => line(`• ${t}`)); } else { line("• None"); }
+  line("");
+  line("Details: Pivot & Summary, New Assets, " + (rc.removed.length ? "Removed Assets, " : "") + (rc.serialChecked ? "Serial Number Changes, " : "") +
+    "Scrap & Inactive Assets and POs Validated tabs in the attached workbook.");
+  line("");
+  line("Best regards,");
+
+  // Copilot in PowerPoint: one slide per section, numbers given exactly, the open VOIS template's look
+  const ppt: string[] = [];
+  const top = (m: Map<string, number>, n: number) => keysByCount(m).slice(0, n).map(k => `${k} ${fmtNum(m.get(k) || 0)}`).join(", ");
+  ppt.push(`Create a presentation titled VCAMS Monthly Asset Reconciliation - ${curName}, using this VOIS template's slide layouts, ` +
+    "colours and fonts. Use only the numbers below, exactly as written. Do not add, round or estimate numbers. " +
+    "Max 4 short bullets per slide. Where a chart is asked for, add a simple bar or column chart with these values.");
+  ppt.push(`Slide 1, title: ${prevName} vs ${curName}.`);
+  ppt.push(`Slide 2, headline numbers as 4 large figures: ${prevName} ${fmtNum(rc.prevRows)} assets; ${curName} ${fmtNum(rc.curRows)} assets; ` +
+    `net movement ${signed(rc.curRows - rc.prevRows)}; ${fmtNum(rc.newAssets.length)} new, ${fmtNum(rc.removed.length)} removed, ` +
+    `${fmtNum(rc.operational.length)} scrapped or lost.`);
+  const moved = flatten(groups.map(x => x.rows.filter(r => r[1] !== r[2]).map(r => `${r[0]}\u0001${r[2] - r[1]}`)))
+    .map(t => t.split("\u0001")).sort((a, b) => Math.abs(+b[1]) - Math.abs(+a[1])).slice(0, 5).map(t => `${t[0]} ${signed(+t[1])}`).join(", ");
+  ppt.push(`Slide 3, assets by value group, clustered column chart ${prevName} vs ${curName}: ` +
+    groups.map(x => `${x.g} ${fmtNum(x.p)} vs ${fmtNum(x.c)}`).join("; ") + `. Biggest changes: ${moved || "none"}.`);
+  ppt.push(`Slide 4, new assets ${fmtNum(rc.newAssets.length)}` + (rc.newAssets.length ? `, bar chart by type: ${top(countBy(rc.newAssets.map(a => a.assetClass)), 6)}. ` +
+    `By PO: ${byPo.size ? top(byPo, 4) : "none"}; blank PurchaseNo ${fmtNum(blankPo)}.` : "."));
+  ppt.push(`Slide 5, scrapped and lost ${fmtNum(rc.operational.length)} (Scrapped ${fmtNum(scrapped.length)}, Lost ${fmtNum(lost.length)})` +
+    (rc.operational.length ? `, bar chart by type: ${top(countBy(rc.operational.map(c => c.cur.assetClass)), 6)}` : "") +
+    `. Other status changes not counted here: ${fmtNum(rc.changes.length - rc.operational.length)}.`);
+  ppt.push(`Slide 6, serial number changes ${rc.serialChecked ? fmtNum(rc.serialChanges.length) + (rc.serialChanges.length ? " (" +
+    top(countBy(rc.serialChanges.map(c => c.change)), 3) + ")" : "") : "not checked"} and removed assets ${fmtNum(rc.removed.length)}` +
+    (rc.removed.length ? " (to be reviewed, not treated as scrapped)" : "") + ".");
+  ppt.push("Slide 7, PO validation table with columns PO, Model, In export, Supplied, Variance, Result: " + (po.length ? po.slice(0, 6).map(r =>
+    `${r[0] || "Blank PurchaseNo"}, ${model(r) || "-"}, ${fmtNum(r[2] as number)}, ${r[3] === "" ? "-" : fmtNum(r[3] as number)}, ${r[4] === "" ? "-" : signed(r[4] as number)}, ${r[7]}`).join("; ") +
+    (po.length > 6 ? `; and ${po.length - 6} more POs` : "") : "no new-asset POs") + ".");
+  ppt.push(`Slide 8, points for review: ${review.length ? review.slice(0, 4).join("; ") : "none"}.`);
+  return { subject, email, heads, ppt };
+}
+
 // ============================================================================ checks
 function runChecks(ctx: Ctx): void {
   const { assets, asOf, maps, cols, users, devices } = ctx;
@@ -2053,7 +2196,7 @@ function buildFindings(ctx: Ctx): Finding[] {
 
 // ============================================================================ workbook output
 const BRAND = "#E60000", DARK = "#333333", GREY = "#595959";
-const SHEETS = ["Start Here", "Executive Summary", "Monthly KPIs", "Pivot & Summary", "New Assets", "Removed Assets",
+const SHEETS = ["Start Here", "Monthly Email", "Executive Summary", "Monthly KPIs", "Pivot & Summary", "New Assets", "Removed Assets",
   "Serial Number Changes", "Scrap & Inactive Assets", "POs Validated", "Quality Checks", "Integrity Score", "Exceptions", "Duplicates",
   "Users & Leavers", "Reconciliation", "Stock & Utilisation", "Lifecycle", "Since Last Audit", "Inventory Overview",
   "Physical Check", "All Assets", "Glossary"];
@@ -2063,7 +2206,7 @@ function newSheet(wb: ExcelScript.Workbook, name: string, title: string, subtitl
   if (old) { old.delete(); }
   const ws = wb.addWorksheet(name);
   ws.setShowGridlines(false);
-  ws.setTabColor(SHEETS.indexOf(name) >= 0 && SHEETS.indexOf(name) < 3 ? BRAND : name === MAPPINGS_SHEET ? "#2E7D32" : DARK);
+  ws.setTabColor(SHEETS.indexOf(name) >= 0 && SHEETS.indexOf(name) < 4 ? BRAND : name === MAPPINGS_SHEET ? "#2E7D32" : DARK);
   const t = ws.getRange("A1");
   t.setValue(title);
   t.getFormat().getFont().setSize(16);
@@ -2177,8 +2320,9 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
   if (ctx.recon.available) {
     const notes = buildReconSheets(wb, ctx);
     if (notes.length) { ctx.runInfo.push(["PivotTables and formulas", notes.join("; ")]); }
+    buildEmailSheet(wb, ctx);
   } else {
-    reconSheets.forEach(n => { const w = wb.getWorksheet(n); if (w) { w.delete(); } });
+    reconSheets.concat([EMAIL_SHEET]).forEach(n => { const w = wb.getWorksheet(n); if (w) { w.delete(); } });
     // The user's PO data is kept on its sheet even without a previous export
     if (ctx.po.rows.length) {
       const ws0 = newSheet(wb, PO_SHEET, "POs Validated", "Supplied by the user. PO reconciliation needs the previous export (new assets).");
@@ -2581,7 +2725,40 @@ const CHECK_NEEDS: Record<string, string> = {
 };
 
 // ============================================================================ reconciliation sheets
-const PO_SHEET = "POs Validated", SUMMARY_SHEET = "Pivot & Summary";
+const PO_SHEET = "POs Validated", SUMMARY_SHEET = "Pivot & Summary", EMAIL_SHEET = "Monthly Email";
+// Monthly Email: the email to copy into Outlook and the prompt to copy into Copilot in PowerPoint, one line per row
+// (copying several rows gives clean lines; one cell with line breaks would be copied with quotes around it)
+function buildEmailSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
+  progress("Writing Monthly Email");
+  const rep = monthlyReport(ctx);
+  const ws = newSheet(wb, EMAIL_SHEET, "Monthly Email and PowerPoint prompt", "Built from this run's numbers. Copy, paste, then " +
+    "add your name. Check the numbers against Pivot & Summary before sending.");
+  ws.getRangeByIndexes(0, 0, 1, 1).getFormat().setColumnWidth(30);
+  ws.getRangeByIndexes(0, 1, 1, 1).getFormat().setColumnWidth(900);
+  let r = 3;
+  const block = (title: string, how: string, lines: string[], bold: number[]): number => {
+    putValues(ws, r, 0, [[title, ""], ["", how]]);
+    const f = ws.getRangeByIndexes(r, 0, 1, 1).getFormat().getFont();
+    f.setBold(true); f.setColor(BRAND); f.setSize(12);
+    ws.getRangeByIndexes(r + 1, 1, 1, 1).getFormat().getFont().setItalic(true);
+    ws.getRangeByIndexes(r + 1, 1, 1, 1).getFormat().getFont().setColor(GREY);
+    const first = r + 2;
+    putValues(ws, first, 1, lines.map(t => [t]));
+    ws.getRangeByIndexes(first, 1, lines.length, 1).setNumberFormat("@");
+    bold.forEach(i => ws.getRangeByIndexes(first + i, 1, 1, 1).getFormat().getFont().setBold(true));
+    return first + lines.length + 2;
+  };
+  r = block("Email subject", "Copy the cell below into the email subject.", [rep.subject], []);
+  const emailFirst = r + 2;
+  r = block("Email body", `Select B${emailFirst + 1}:B${emailFirst + rep.email.length}, copy (Ctrl+C) and paste into the email. ` +
+    "If Outlook shows a grid, use Paste Options > Keep Text Only.", rep.email, rep.heads);
+  const prompt = rep.ppt.join(" ");
+  const pptFirst = r + 2;
+  r = block("Copilot in PowerPoint prompt", "Open a new presentation from the VOIS template, open Copilot, then select " +
+    `B${pptFirst + 1}:B${pptFirst + rep.ppt.length}, copy and paste it as the prompt. ${prompt.length.toLocaleString("en-US")} characters` +
+    (prompt.length > COPILOT_PROMPT_LIMIT ? ` - longer than ${COPILOT_PROMPT_LIMIT.toLocaleString("en-US")}: if Copilot cuts it, paste slides 1-5 first, then ask it to add slides 6-8.` : "."),
+  rep.ppt, []);
+}
 const NEW_HEADER = ["Asset no.", "Serial no.", "Asset status", "Asset Type", "Model", "Purchase date", "PurchaseNo", "Last scan",
   "Scandate Age in Days", "Function Unit", "AssetCreationDate", "Creation Age in Days", "AssetUpdateDate"];
 const REMOVED_HEADER = ["Asset no.", "Serial no.", "Previous Asset Status", "Asset Type", "Model", "Purchase date", "PurchaseNo",

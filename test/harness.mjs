@@ -4,7 +4,7 @@
 //      NOREF=1 (drop the Users and Intune tabs)  REFJSON=1 (pass them as usersJson / devicesJson instead of tabs)
 //      ONLYCUR=1 (drop the previous export)  SNAPSHOT=1 (previous month as a snapshot from an earlier run, not a tab)
 //      NOPO=1 (drop the PO tab)  POJSON=1 (pass the PO rows as poJson)  MARK=1 (fill the Physical Check sheet and re-run)
-//      HISTOUT=<file> (save historyRows)  BRIEFOUT=<file> (save agentInput)  MAXCALLS=<n> (fail above n Excel calls)
+//      HISTOUT=<file> (save historyRows)  BRIEFOUT=<file> (save agentInput)  REPORTOUT=<file> (save the email and PowerPoint prompt)  MAXCALLS=<n> (fail above n Excel calls)
 //      TABNAMES=1 (tabs named "previous month export" / "this month export")
 import { stripTypeScriptTypes } from "node:module";
 import fs from "node:fs";
@@ -100,6 +100,7 @@ console.log("agentInput chars", agentInput.length, "| historyRows", historyRows.
 fs.writeFileSync("agent_input.md", agentInput);
 if (process.env.HISTOUT) fs.writeFileSync(process.env.HISTOUT, JSON.stringify(historyRows));
 if (process.env.BRIEFOUT) fs.writeFileSync(process.env.BRIEFOUT, agentInput.replace(/^.*(2026\.10\.14\.[0-9]+|Run time).*$/gm, ""));
+if (process.env.REPORTOUT) fs.writeFileSync(process.env.REPORTOUT, [res.emailSubject, "", res.emailBody, "", "--- PowerPoint prompt (" + res.pptPrompt.replace(/\n/g, " ").length + " characters)", res.pptPrompt].join("\n"));
 if (process.env.MARK) {
   const pc = wb.getWorksheet("Physical Check");
   for (let r = 4; pc.cells.get(`${r},0`) !== undefined; r++) {

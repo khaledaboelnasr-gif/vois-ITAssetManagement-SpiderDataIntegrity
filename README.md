@@ -13,7 +13,8 @@ The workbook covers:
   - the operational list of assets that became **Scrapped** or **Lost**;
   - the user-supplied **PO validation** and the PO reconciliation;
   - **Pivot & Summary** by asset type (High value / Low value / Other), with PivotTables;
-  - the **quality checks** and completion report.
+  - the **quality checks** and completion report;
+  - the **monthly email**, ready to copy, and a **Copilot in PowerPoint prompt** for the slides.
 - **Data integrity:** completeness, validity, duplicates, consistency and timeliness, with an integrity score.
   - With a user directory, it also finds leavers who still hold assets.
   - With an Intune / SCCM export, it also finds devices that are missing from device management, and devices that are online although VCAMS says they are scrapped.
@@ -55,6 +56,8 @@ It follows the same pattern as [vois-ticket-review](https://github.com/khaledabo
    - optionally, a `PO Validation` tab with the user's PO rows.
 2. In Excel on the web, go to **Automate > New script**, paste `asset_audit_officescript.ts`, and run it.
 3. Start with **Start Here**, then **Executive Summary** and **Quality Checks**.
+4. **Monthly Email** has the monthly email ready to copy into Outlook, and a prompt for Copilot in PowerPoint
+   (open a new presentation from the VOIS template first) that builds the slides from the same numbers.
 
 ## Test locally
 

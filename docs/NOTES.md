@@ -156,4 +156,5 @@ main(workbook, auditDate?, previousDate?, historyJson?, marketFilter?, focus?, s
 - `runInfo`;
 - `agentInput` (the markdown brief for the agent);
 - `historyRows`;
-- `snapshot`.
+- `snapshot`;
+- `emailSubject`, `emailBody` and `pptPrompt` (the Monthly Email tab: the monthly email text and the Copilot in PowerPoint prompt; empty when there is no previous month).
