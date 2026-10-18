@@ -61,6 +61,13 @@ The spec is the "Monthly Asset Reconciliation Copilot Agent" instructions, writt
 
 ## Key decisions
 
+- **Glossary (2026-10-18).** The report now ends with a Glossary tab ("how everything works"): 1 the monthly routine,
+  2 every tab (what it shows, how it is made, what you can change; tab names link to the tabs), 3 how each number is
+  worked out, 4 statuses (stage, how they count for stock, whether they go on Scrap & Inactive Assets), 5 change reasons
+  and the words they look for, 6 PO results, 7 asset types and value groups, 8 every Mappings Kind with an example.
+  It is written from the script's own rules and lists, so it changes when they change. An empty Mappings tab is added
+  when there is none.
+
 - **PO validation is managed on the POs Validated tab (2026-10-18).** Table 1 (tblPOValidated) is the input: dropdowns
   for the two validations, a whole-number check on Quantity, yellow while a cell is empty, and a to-do row (Purchase
   Number + asset type from Spider only) for every new-asset PO with no validation yet. The script never fills Quantity,

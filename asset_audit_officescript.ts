@@ -231,7 +231,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.18.10";
+const SCRIPT_VERSION = "2026.10.18.11";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -2369,7 +2369,7 @@ const BRAND = "#E60000", DARK = "#333333", GREY = "#595959";
 // Stock & Utilisation. false = the full audit (integrity score, exceptions, leavers, lifecycle, ...).
 const REPORT_ONLY = true;
 const REPORT_SHEETS = ["Monthly Email", "Pivot & Summary", "New Assets", "Removed Assets", "Serial Number Changes",
-  "Scrap & Inactive Assets", "POs Validated", "Stock & Utilisation"];
+  "Scrap & Inactive Assets", "POs Validated", "Stock & Utilisation", "Glossary", "Mappings"];
 const SHEETS = ["Start Here", "Monthly Email", "Executive Summary", "Monthly KPIs", "Pivot & Summary", "New Assets", "Removed Assets",
   "Serial Number Changes", "Scrap & Inactive Assets", "POs Validated", "Quality Checks", "Integrity Score", "Exceptions", "Duplicates",
   "Users & Leavers", "Reconciliation", "Stock & Utilisation", "Lifecycle", "Since Last Audit", "Inventory Overview",
@@ -2643,6 +2643,129 @@ function excludedLines(ctx: Ctx): string[] {
     `${fmtNum(e[1].filter(a => stockGroup(a) === STOCK_HEADSETS).length)} headsets`));
 }
 
+// Glossary (report mode): the monthly routine, what each tab shows and how it is made, how every number is worked
+// out, and the lists the rules use. Built from the same constants as the rules, so it always matches the script.
+function buildGuideSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
+  progress("Writing Glossary");
+  const ws = newSheet(wb, "Glossary", "Glossary - how everything works", `Script version ${SCRIPT_VERSION}. Start with ` +
+    "the monthly routine, then look up any tab or number below.");
+  link(ws, 2, 0, "‹ Back to Pivot & Summary", SUMMARY_SHEET);
+  [[0, 230], [1, 560], [2, 420], [3, 300]].forEach(w => ws.getRangeByIndexes(0, w[0], 1, 1).getFormat().setColumnWidth(w[1]));
+  const wrapAll: TableOpts = { widths: [], wrap: [0, 1, 2, 3] };
+  const fu = STOCK_EXCLUDE_FU.concat(ctx.maps.stockExclude).join(" and ");
+  const validateTypes = "Notebook, Monitor and Zubehör-Client";
+
+  let r = sectionTitle(ws, 4, "1. Your monthly routine");
+  r = addTable(ws, r, "tblGuideRoutine", ["Step", "What to do", "Why"], [
+    ["1. Prepare", "Put last month's and this month's Spider exports in one workbook, each on its own tab, with the date in the tab name " +
+      "(e.g. '9-13-2026 Export' and '10-14-2026 Export').", "The script finds the exports by their headers and tells them apart by the dates in the names."],
+    ["2. Run", "Automate > asset_audit > Run. Wait for 'Result sheets written' in the Output.", "Builds every tab below from the two exports."],
+    ["3. Fill in", "POs Validated: the yellow cells in table 1. Scrap & Inactive Assets: Validation Result and Note for rows with Needs Validation = Yes.",
+      "Only you know the PO details and the outcome of each check."],
+    ["4. Run again", "Run the script once more.", "Your entries are kept and flow into Pivot & Summary, the email and the PowerPoint prompt."],
+    ["5. Send", "Monthly Email: copy the subject and body into Outlook, save the workbook with the attachment name, and paste the PowerPoint " +
+      "prompt into Copilot in a presentation made from the VOIS template.", "Everything you send comes from the same numbers."]
+  ], wrapAll);
+
+  r = sectionTitle(ws, r, "2. The tabs", "Click a tab name to open it");
+  const tabs: [string, string, string, string][] = [
+    [EMAIL_SHEET, "The email subject, attachment name and body, and the Copilot prompt for a 4-slide executive deck.",
+      "Written from the tabs below on every run. Email sections: 1 totals, 2 new assets by type and PO, 2.1 each PO with its models, " +
+      "3 serial changes, 4 / 4.1 status changes with reasons and validation progress, 4.2 assets needing follow-up, 5 stock utilization.",
+      "Nothing - copy it. Your validation notes appear in it automatically."],
+    [SUMMARY_SHEET, "1 key figures (each links to its tab), 2 assets by type last month vs this month (High / Low value / Other), " +
+      "3 every status change, 4-7 new assets by type, PO and model, 8-10 PivotTables.",
+      "Key figures and the counts by type are live formulas on the other tabs and the export tabs; 'Check' compares them with the script's count.",
+      "Nothing. After editing a source table, right-click a PivotTable > Refresh."],
+    ["New Assets", "Every asset in this month's export that was not in last month's.", "Matched on Asset no. only; the 13 standard columns.", "-"],
+    ["Removed Assets", "Assets in last month's export that are missing from this month's (only shown when there are any).",
+      "Matched on Asset no. They are NOT treated as scrapped - each needs review.", "-"],
+    ["Serial Number Changes", "Assets in both months whose serial number changed, was added or was removed.",
+      "Case, spaces and punctuation are ignored; N/A, 0 and similar placeholders count as blank.", "-"],
+    ["Scrap & Inactive Assets", `Assets whose status changed to ${orList(OPERATIONAL_STATUSES)} since last month, with the export's comments, ` +
+      "the change reason and your validation.", `Change Reason is read from the comments (table 5). Needs Validation = Yes for a ${validateTypes} ` +
+      "that became Scrapped or Inactive; those rows come first.",
+      `Validation Result (${VALIDATION_RESULTS.join(" / ")}) and Validation Note. Kept when the script runs again (by Asset no.).`],
+    [PO_SHEET, "1 your PO validation rows, 2 the result per PO (green = matched), 3 what still needs you.",
+      "Table 1 is read back on the next run and merged with any 'PO Validation' tab (your edits win). A to-do row is added for every new-asset " +
+      "PO with no validation yet. Results: table 6.", "Table 1: fill the yellow cells (dropdowns for the validations), add rows under it for missing POs."],
+    ["Stock & Utilisation", "Notebooks and headsets in use vs in stock, by model, wired vs wireless headsets, and the excluded Function Units.",
+      "Rules in section 3 and table 4 below.", "Through the Mappings tab (StockStatus, StockExclude, Headset)."],
+    [MAPPINGS_SHEET, "Your own rules (empty until you add one).", "Read at the start of every run.", "Add rows - every Kind is in table 8."],
+    ["Glossary", "This page.", "Written from the script's own rules, so it always matches what the script does.", "-"]
+  ];
+  const tabTop = r + 1;
+  r = addTable(ws, r, "tblGuideTabs", ["Tab", "What it shows", "How it is made", "What you can change"], tabs, wrapAll);
+  tabs.forEach((t, i) => link(ws, tabTop + i, 0, t[0], t[0]));
+
+  r = sectionTitle(ws, r, "3. How each number is worked out");
+  r = addTable(ws, r, "tblGuideRules", ["Topic", "Rule"], [
+    ["Matching the two months", "By Asset no. only (spaces and case ignored) - never by row, serial or model."],
+    ["Previous / current total", "The number of asset rows in each export."],
+    ["New asset", "Asset no. in this month's export but not in last month's."],
+    ["Removed asset", "Asset no. in last month's export but not in this month's."],
+    ["Status change", "Same Asset no., different status. Spelling, spacing and capitals are not changes (' Reserved ' = 'Reserved', 'SCRAPPED' = 'Scrapped')."],
+    ["Scrap & Inactive list", `Status changes that end in ${orList(OPERATIONAL_STATUSES)}. All other changes are counted on Pivot & Summary (table 3) only.`],
+    ["Needs validation", `A ${validateTypes} whose status changed to Scrapped or Inactive.`],
+    ["Change reason", "The Status comment and Comment are searched for the words in table 5, top to bottom; the first match wins. Your Mappings " +
+      "'Reason' rows are checked first. Empty comments = 'No comment'; no match = 'Other (see comment)'."],
+    ["Email 4.1 / 4.2", `Per status: the count and the 3 main reasons. Scrapped and Inactive: count per type, with the validation progress for ${validateTypes}. ` +
+      `Lost and Stolen: each asset when ${EMAIL_DETAIL_MAX} or fewer. 4.2 lists only assets you marked Not validated or Under investigation.`],
+    ["Serial number change", "Same Asset no., different serial after ignoring case, spaces and punctuation. Changed = both filled; added = was blank or " +
+      "a placeholder; removed = now blank or a placeholder."],
+    ["Value groups", "High value / Low value / Other come from the standard type list (table 7). Any other type is 'Unlisted'."],
+    ["PO reconciliation", "Your PO rows are compared with this month's new assets that carry the same PurchaseNo. Quantity Variance = your Quantity - " +
+      "assets on Spider. In the email, PO models are matched to asset types (Bags = Bag, Mouses / Mice = Mouse). Results: table 6."],
+    ["Stock: in use / in stock", "Each status counts as In use, In stock or Left out (table 4). Utilization = in use / (in use + in stock)."],
+    ["Stock: excluded Function Units", `${fu}: left out of utilization whatever the status, and listed on the Stock tab (tables 5-6) and in the email.`],
+    ["Stock: headsets", "Type Headset plus Zubehör-Client items whose model mentions Headset, Jabra, Plantronics, Blackwire, Evolve, EPOS, Sennheiser, " +
+      "Voyager or Poly. Wireless: wireless, Bluetooth, BT, Voyager, Savi, Evolve 65/75/85, Engage, DECT, Link. Wired: wired, USB, Blackwire, " +
+      "Evolve 20/30/40/50/80, SC 60, jack, corded. Otherwise 'Not sure (check model)'. Mappings 'Headset' rows win."],
+    ["Deployed this month", "Assets that moved to In operation since last month's export (a new asset already In operation counts too)."],
+    ["Months of cover", "In stock / deployed this month: how many months the stock lasts at this month's pace."],
+    ["Dates", "The dates in the export tab names give 'from ... to ...' in the email and the attachment name."],
+    ["Live formulas", "Key figures and counts by type are formulas. If Excel rejects one, the script's own number is kept and the Output says which."]
+  ], { widths: [], wrap: [0, 1] });
+
+  r = sectionTitle(ws, r, "4. Statuses and how they count", "Any other status (e.g. Damaged, Delivered) is kept as it is, flagged for review, and left out of stock");
+  r = addTable(ws, r, "tblGuideStatuses", ["Status", "Stage", "Stock utilization", `On Scrap & Inactive Assets when new`],
+    VCAMS_STATUSES.map(x => {
+      const own = ctx.maps.stockStatus.get(compactKey(x[0]));
+      return [x[0], x[1], own || (x[1] === IN_USE ? STOCK_USE : x[1] === STOCK ? STOCK_STOCK : STOCK_OUT) + (own ? " (your Mappings row)" : ""),
+        OPERATIONAL_STATUSES.indexOf(x[0]) >= 0 ? "Yes" : ""] as Cell[];
+    }), wrapAll);
+
+  r = sectionTitle(ws, r, "5. Change reasons", "Searched in the Status comment and Comment, top to bottom");
+  r = addTable(ws, r, "tblGuideReasons", ["Reason", "Looks for"], ctx.maps.reasons.map(x => [x[1] + " (your Mappings row)", x[0]] as Cell[])
+    .concat(CHANGE_REASONS.map(x => [x[1], x[2]] as Cell[]), [["No comment", "Both comments empty"], ["Other (see comment)", "Nothing above matched"]]),
+  { widths: [], wrap: [1] });
+
+  r = sectionTitle(ws, r, "6. PO results");
+  r = addTable(ws, r, "tblGuidePoResults", ["Result", "Meaning", "What to do"], [
+    [PO_RESULTS.matched, "Your quantity equals the assets on Spider, and both validations are Yes or Not Applicable.", "Nothing."],
+    [PO_RESULTS.variance, "Validations are fine but your quantity differs from the assets on Spider with that PO.", "Check the PO quantity or the assets still to add."],
+    [PO_RESULTS.missing, "A new-asset PO has no row in table 1, or a validation is empty.", "Complete its row in POs Validated."],
+    [PO_RESULTS.pending, "A validation is Pending or No.", "Follow up the approval."],
+    [PO_RESULTS.notFound, "Your PO has no new asset on Spider yet.", "Check whether the assets are still to be added."],
+    [PO_RESULTS.blank, "New assets with an empty PurchaseNo on Spider.", "Add the PurchaseNo on Spider."]
+  ], wrapAll);
+
+  r = sectionTitle(ws, r, "7. Asset types and value groups");
+  r = addTable(ws, r, "tblGuideTypes", ["Asset Type", "Value Group"], VCAMS_TYPES.map(t => [t[0], t[1]] as Cell[]), { widths: [] });
+
+  r = sectionTitle(ws, r, "8. Mappings - your own rules", "Add a row on the Mappings tab (Kind | Value | MapsTo), then run the script again");
+  addTable(ws, r, "tblGuideMappings", ["Kind", "Value", "MapsTo", "Example and effect"], [
+    ["StockStatus", "A status", "In use / In stock / Exclude", "StockStatus | Reserved | Exclude - Reserved no longer counts as stock."],
+    ["StockExclude", "Function Unit text", "-", "StockExclude | VOIS_EG Repair Centre - leave out a Function Unit from stock (reported separately)."],
+    ["Headset", "Model text", "Wired / Wireless", "Headset | Plantronics Standard | Wired - fix a headset the script cannot classify."],
+    ["Reason", "A word in the comments", "A reason", "Reason | vhub | Returned to warehouse - your own change reason, checked first."],
+    ["Status", "A status", "A stage (In Use, In Stock, Inactive, Disposed, Lost, ...)", "Status | Damaged | In Repair - how a non-standard status counts."],
+    ["Group", "An asset type", "High value / Low value / Other", "Group | Docking Station | High value - add a type to a value group."],
+    ["Column", "A standard header", "Your column name", "Column | Asset status | Current Status - when the export names a column differently."]
+  ], wrapAll);
+  try { ws.getRangeByIndexes(0, 0, r + 12, 4).getFormat().autofitRows(); } catch (e) { progress("Glossary: rows not autofitted"); }
+}
+
 // Pivot & Summary: key figures (linked to the detail tabs), the summary by type, status changes, new-asset breakdowns
 // and the three PivotTables, each under its own numbered heading.
 //   Columns A-E: 1 Key figures, 2 Assets by type, 3 Status changes | G-H: 4-7 New assets | J.., M.., P..: 8-10 PivotTables
@@ -2861,6 +2984,11 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
     }
   }
   if (REPORT_ONLY) {
+    buildGuideSheet(wb, ctx);
+    if (!wb.getWorksheet(MAPPINGS_SHEET) && ctx.maps.source === "None") {
+      const mws = newSheet(wb, MAPPINGS_SHEET, "Mappings", "Your rules. Add a row, then run the script again. The Glossary tab lists every Kind.");
+      addTable(mws, 3, "Mappings", ["Kind", "Value", "MapsTo", "Note"], [], { widths: [140, 260, 200, 320], blankRow: true });
+    }
     // Tabs that earlier (full audit) runs added are removed; the export tabs and Mappings stay
     SHEETS.filter(n => REPORT_SHEETS.indexOf(n) < 0).forEach(n => { const w = wb.getWorksheet(n); if (w) { w.delete(); } });
     REPORT_SHEETS.forEach((name, i) => { const w = wb.getWorksheet(name); if (w) { w.setPosition(i); } });
@@ -3237,6 +3365,7 @@ function buildEmailSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
   ws.getRangeByIndexes(0, 0, 1, 1).getFormat().setColumnWidth(30);
   ws.getRangeByIndexes(0, 1, 1, 1).getFormat().setColumnWidth(900);
   link(ws, 2, 0, "Open Pivot & Summary ›", SUMMARY_SHEET);
+  if (REPORT_ONLY) { link(ws, 2, 1, "How everything works: Glossary ›", "Glossary"); }
   let r = 4;
   const block = (title: string, how: string, lines: string[], bold: number[]): number => {
     putValues(ws, r, 0, [[title, ""], ["", how]]);
@@ -3350,17 +3479,17 @@ function buildPoSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
 }
 // Why an asset changed status, read from its Spider comments. The first matching rule wins; Mappings rows
 // "Reason | <keyword> | <reason>" come before the built-in rules.
-const CHANGE_REASONS: [RegExp, string][] = [
-  [/write[\s-]*off|writeoff/, "Write-off memo"],
-  [/death|deceased|passed away/, "Employee death"],
-  [/stolen|theft|robbery/, "Stolen"],
-  [/\blost\b|missing device/, "Lost"],
-  [/damag|broken|faulty|not working|defect|crack|burn|liquid|water/, "Damaged / faulty"],
-  [/end of life|\beol\b|obsolete|old model|life ?cycle|refresh/, "End of life / refresh"],
-  [/dispos|e-?waste|recycl|\bsold\b|auction|market/, "Disposal / sale"],
-  [/return|swap|replac|exchange|different asset|wrong asset/, "Returned / replaced"],
-  [/audit|inventory|reconcil|correction|not found|duplicate|wrong status/, "Inventory / data correction"],
-  [/\binc\d{6,}|\btt\b|ticket|incident/, "Incident ticket"]
+const CHANGE_REASONS: [RegExp, string, string][] = [
+  [/write[\s-]*off|writeoff/, "Write-off memo", "write off, write-off, writeoff"],
+  [/death|deceased|passed away/, "Employee death", "death, deceased, passed away"],
+  [/stolen|theft|robbery/, "Stolen", "stolen, theft, robbery"],
+  [/\blost\b|missing device/, "Lost", "lost, missing device"],
+  [/damag|broken|faulty|not working|defect|crack|burn|liquid|water/, "Damaged / faulty", "damaged, broken, faulty, not working, defect, crack, burn, liquid, water"],
+  [/end of life|\beol\b|obsolete|old model|life ?cycle|refresh/, "End of life / refresh", "end of life, EOL, obsolete, old model, lifecycle, refresh"],
+  [/dispos|e-?waste|recycl|\bsold\b|auction|market/, "Disposal / sale", "disposal, e-waste, recycle, sold, auction, marketed"],
+  [/return|swap|replac|exchange|different asset|wrong asset/, "Returned / replaced", "returned, swap, replaced, exchange, different asset, wrong asset"],
+  [/audit|inventory|reconcil|correction|not found|duplicate|wrong status/, "Inventory / data correction", "audit, inventory, reconcile, correction, not found, duplicate, wrong status"],
+  [/\binc\d{6,}|\btt\b|ticket|incident/, "Incident ticket", "an INC number, TT, ticket, incident"]
 ];
 function changeReason(a: Asset, maps: Mappings): string {
   const text = `${a.statusComment} ${a.comment}`.toLowerCase().trim();
