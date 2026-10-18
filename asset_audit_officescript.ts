@@ -2527,9 +2527,18 @@ const STOCK_USE = "In use", STOCK_STOCK = "In stock", STOCK_OUT = "Left out";
 // Function Units left out of stock utilization (user decision, 2026-10-18), reported on their own; Mappings rows
 // "StockExclude | <text>" add more. Compared without case, spaces or punctuation, and "contains".
 const STOCK_EXCLUDE_FU = ["VOIS_EG Scrape Warehouse", "VOIS_EG Unreturned Devices"];
+// Worked out once per Function Unit text (the export repeats a few dozen units on every row)
+const FU_MEMO = { map: new Map<string, boolean>(), maps: "" };
 function excludedFU(a: Asset, maps: Mappings): boolean {
-  const fu = compactKey(a.functionUnit);
-  return !!fu && STOCK_EXCLUDE_FU.concat(maps.stockExclude).some(x => compactKey(x) && fu.indexOf(compactKey(x)) >= 0);
+  const list = STOCK_EXCLUDE_FU.concat(maps.stockExclude).map(x => compactKey(x)).filter(x => x);
+  if (FU_MEMO.maps !== list.join("|")) { FU_MEMO.map.clear(); FU_MEMO.maps = list.join("|"); }
+  let hit = FU_MEMO.map.get(a.functionUnit);
+  if (hit === undefined) {
+    const fu = compactKey(a.functionUnit);
+    hit = !!fu && list.some(x => fu.indexOf(x) >= 0);
+    FU_MEMO.map.set(a.functionUnit, hit);
+  }
+  return hit;
 }
 function stockBucket(a: Asset, maps: Mappings): string {
   if (excludedFU(a, maps)) { return STOCK_OUT; }
