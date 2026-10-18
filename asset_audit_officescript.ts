@@ -231,7 +231,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.18.6";
+const SCRIPT_VERSION = "2026.10.18.7";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -1645,6 +1645,8 @@ function signed(n: number): string {
 interface MonthlyReport { subject: string; attachment: string; email: string[]; heads: number[]; ppt: string[]; }
 // Status-change and serial groups up to this size are listed asset by asset (larger ones as a count)
 const EMAIL_DETAIL_MAX = 10;
+// Scrapped asset types listed asset by asset in the email (user decision, 2026-10-18)
+const EMAIL_SCRAPPED_DETAIL_TYPES = ["Monitor", "Notebook", "Zubehör-Client"].map(t => compactKey(t));
 // Where the team adds what the investigation found for each listed asset
 const EMAIL_NOTE = "[add validation note]";
 const COPILOT_PROMPT_LIMIT = 2000;
@@ -1826,8 +1828,10 @@ function monthlyReport(ctx: Ctx): MonthlyReport {
     line(`${L1}${g[0]}`);
     typeCounts(g[1].map(c => c.cur)).forEach(t => {
       const ofType = g[1].filter(c => c.cur.assetClass === t);
-      // Large groups as a count; small ones by model, with each asset and its Spider comment to complete
-      if (ofType.length > EMAIL_DETAIL_MAX) { line(`${L2}${plural(t)}: ${fmtNum(ofType.length)}`); return; }
+      // Scrapped: only Monitors, Notebooks and Zubehör-Client are listed asset by asset (the rest as a count);
+      // Inactive, Lost and Stolen: every asset is listed. Each listed asset ends with a note for the team to complete.
+      const detail = g[0] !== "Scrapped" || EMAIL_SCRAPPED_DETAIL_TYPES.indexOf(compactKey(t)) >= 0;
+      if (!detail) { line(`${L2}${plural(t)}: ${fmtNum(ofType.length)}`); return; }
       line(`${L2}${t}`);
       keysByCount(countBy(ofType.map(c => c.cur.model || "(no model)"))).forEach(m => {
         const ofModel = ofType.filter(c => (c.cur.model || "(no model)") === m);

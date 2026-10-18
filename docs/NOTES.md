@@ -67,6 +67,8 @@ The spec is the "Monthly Asset Reconciliation Copilot Agent" instructions, writt
   Raised By, Purchase Date or a validation. Next run, the table is read back and merged with any PO tab (same Purchase
   Number + Model counts once; POs Validated wins); unfilled to-do rows are not PO data. poJson from the chat overrides
   both. Table 2 = result per PO (green matched, amber missing / pending, red variance / not found); table 3 = what to do.
+- **Email 4.1 detail (2026-10-18):** Scrapped - every Monitor, Notebook and Zubehör-Client asset is listed (asset no.,
+  serial, Spider comment, "[add validation note]"), other types as a count; Inactive, Lost and Stolen - every asset listed.
 - **Email 2.1** lists, under each PO, its models on Spider (type - model: count) and the PO lines not on Spider yet.
 
 - **Stock utilisation = Notebooks and Headsets only (user decision, 2026-10-18).** Headsets = type "Headset" plus
