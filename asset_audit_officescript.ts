@@ -231,7 +231,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.18.13";
+const SCRIPT_VERSION = "2026.10.18.14";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -1657,7 +1657,16 @@ function signed(n: number): string {
 // ============================================================================ monthly email and PowerPoint prompt
 // The monthly email holds only what the team already sends: totals, the summary by type, new / removed assets, serial
 // number changes, Scrapped / Lost, PO validation and the points to review. No names or emails.
-interface MonthlyReport { subject: string; attachment: string; email: string[]; heads: number[]; ppt: string[]; }
+interface MonthlyReport { subject: string; attachment: string; email: string[]; heads: number[]; ppt: string[]; slides: Slide[]; }
+// A chart for the PowerPoint: column (side by side), bar (horizontal), stacked (bar), stacked100 (bar, %), doughnut
+interface SlideChart { title: string; kind: string; header: string[]; rows: Cell[][]; colors: string[]; }
+// One PowerPoint slide: the title states the message; 4 KPI cards [label, value]; up to 3 bullets; its charts
+interface Slide { name: string; title: string; kpis: [string, string][]; bullets: string[]; charts: SlideChart[]; }
+const STATUS_COLOURS: Record<string, string> = { Scrapped: "#4A4D4E", Inactive: "#A6A6A6", Lost: "#E60000", Stolen: "#990000" };
+// Doughnut colours by result: green = done, amber = in progress, red = problem, grey = not started
+const RESULT_COLOURS: Record<string, string> = { Validated: "#2E7D32", "Under investigation": "#F2A900", "Not validated": "#E60000",
+  "Not checked yet": "#BFBFBF", Matched: "#2E7D32", "Quantity variance": "#E60000", "Missing validation": "#BFBFBF",
+  "PO not found in new assets": "#4A4D4E", "Pending approval": "#F2A900", "Blank PO number": "#990000", Other: "#7F7F7F" };
 // Status-change and serial groups up to this size are listed asset by asset (larger ones as a count)
 const EMAIL_DETAIL_MAX = 10;
 // Where the team adds what the investigation found for each listed asset
@@ -1874,40 +1883,90 @@ function monthlyReport(ctx: Ctx): MonthlyReport {
   line("");
   line("Best regards,");
 
-  const top = (m: Map<string, number>, n: number) => keysByCount(m).slice(0, n).map(k => `${k} ${fmtNum(m.get(k) || 0)}`).join(", ");
-  // Copilot in PowerPoint: a 4-slide executive summary. Built the way Microsoft recommends: start from the organisation's
-  // template, say the goal, the audience and the exact content per slide; numbers as big figures and simple tables
-  // (more reliable than charts from text), each slide title stating the message.
-  const ppt: string[] = [];
+  // PowerPoint: 4 content slides (the title states the message, KPI cards, up to 3 bullets, charts). The PPT Slides tab
+  // draws the charts as real Excel charts to paste into the slides; the Copilot prompt builds the slides around them
+  // (Copilot is good at layout and text, not at charts from numbers in a prompt).
   const pctOf = (x: StockRow) => utilOf(x) === "" ? "-" : (100 * (utilOf(x) as number)).toFixed(1) + "%";
   const st = stockSummary(ctx), net = rc.curRows - rc.prevRows;
   const biggest = flatten(groups.map(x => x.rows.filter(r => r[1] !== r[2]).map(r => `${plural(r[0])}\u0001${r[2] - r[1]}`)))
     .map(t => t.split("\u0001")).sort((x, y) => Math.abs(+y[1]) - Math.abs(+x[1]))[0];
   const toCheck = rc.operational.filter(c => needsValidation(c.cur)), checked = toCheck.filter(c => vOf(c)).length;
   const reasonTop = countText(countBy(rc.operational.map(c => changeReason(c.cur, ctx.maps))), 2);
+  const ops = groupsByStatus.reduce((s, g) => s + g[1].length, 0), matched = po.filter(x => x[7] === PO_RESULTS.matched).length;
+  // The n biggest categories, the rest as "Other"
+  const topRows = (m: Map<string, number>, n: number): Cell[][] => {
+    const keys = keysByCount(m), rest = keys.slice(n).reduce((s, k) => s + (m.get(k) || 0), 0);
+    return keys.slice(0, n).map(k => [k, m.get(k) || 0] as Cell[]).concat(rest ? [["Other", rest]] : []);
+  };
+  const slides: Slide[] = [];
+  slides.push({ name: "Overview", title: `${fmtNum(rc.curRows)} assets in ${curName}, ${signed(net)} vs ${prevName}`,
+    kpis: [[`Assets ${curName}`, fmtNum(rc.curRows)], [`Change vs ${prevName}`, signed(net)], ["New assets", fmtNum(rc.newAssets.length)],
+      ["Removed (to review)", fmtNum(rc.removed.length)]],
+    bullets: [biggest ? `Biggest change: ${biggest[0]} ${signed(+biggest[1])}` : "No change by asset type",
+      `${fmtNum(ops)} assets moved to Scrapped, Inactive, Lost or Stolen`,
+      rc.serialChecked ? `${fmtNum(rc.serialChanges.length)} serial number changes` : ""].filter(t => t),
+    charts: [{ title: "Assets by value group", kind: "column", header: ["Value group", prevName, curName],
+      rows: groups.map(x => [x.g, x.p, x.c] as Cell[]), colors: ["#A6A6A6", BRAND] }] });
+  slides.push({ name: "New assets and POs", title: `${fmtNum(rc.newAssets.length)} new assets` +
+      (po.length ? `, ${matched} of ${po.length} POs matched` : " added"),
+    kpis: [["New assets", fmtNum(rc.newAssets.length)], ["POs matched", `${matched} / ${po.length}`], ["PO validations open", fmtNum(open.length)],
+      ["No PurchaseNo", fmtNum(blankPo)]],
+    bullets: [rc.newAssets.length ? `New: ${countText(countBy(rc.newAssets.map(a => plural(a.assetClass))), 3)}` : "No new assets",
+      open.length ? `PO validations to complete: ${open.length}` : "All PO validations complete",
+      blankPo ? `${fmtNum(blankPo)} new assets need a PurchaseNo on Spider` : ""].filter(t => t),
+    charts: [{ title: "New assets by type", kind: "bar", header: ["Asset type", "New assets"],
+      rows: topRows(countBy(rc.newAssets.map(a => a.assetClass)), 6), colors: [BRAND] },
+    { title: "PO validation", kind: "doughnut", header: ["Result", "POs"], rows: topRows(countBy(po.map(x => String(x[7]))), 5),
+      colors: [] }] });
+  const typeStatus = keysByCount(countBy(flatten(groupsByStatus.map(g => g[1].map(c => c.cur.assetClass)))));
+  const statusCols = groupsByStatus.filter(g => g[1].length);
+  const statusRow = (keep: (t: string) => boolean, label: string): Cell[] =>
+    [label as Cell].concat(statusCols.map(g => g[1].filter(c => keep(c.cur.assetClass)).length));
+  slides.push({ name: "Scrapped, inactive and lost", title: `${fmtNum(ops)} assets scrapped, inactive or lost` +
+      (toCheck.length ? `, ${fmtNum(checked)} of ${fmtNum(toCheck.length)} checked` : ""),
+    kpis: [["Scrapped", fmtNum(groupsByStatus[0][1].length)], ["Inactive", fmtNum(groupsByStatus[1][1].length)],
+      ["Lost / stolen", fmtNum(groupsByStatus[2][1].length + groupsByStatus[3][1].length)],
+      ["Validation done", toCheck.length ? `${fmtNum(checked)} / ${fmtNum(toCheck.length)}` : "-"]],
+    bullets: [ops ? `Main reasons: ${reasonTop}` : "No status changes to report",
+      toCheck.length > checked ? `${fmtNum(toCheck.length - checked)} notebooks, monitors and accessories still to validate` : ""].filter(t => t),
+    charts: [{ title: "Status changes by asset type", kind: "stacked", header: ["Asset type"].concat(statusCols.map(g => g[0])),
+      rows: typeStatus.slice(0, 6).map(t => statusRow(x => x === t, t)).concat(typeStatus.length > 6 ?
+        [statusRow(x => typeStatus.indexOf(x) >= 6, "Other")] : []),
+      colors: statusCols.map(g => STATUS_COLOURS[g[0]] || GREY) },
+    { title: "Validation progress", kind: "doughnut", header: ["Result", "Assets"],
+      rows: VALIDATION_RESULTS.map(v => [v, toCheck.filter(c => vOf(c) === v).length] as Cell[])
+        .concat([["Not checked yet", toCheck.length - checked]]).filter(x => x[1]), colors: [] }] });
+  const outFu = ctx.assets.filter(a => stockGroup(a) && excludedFU(a, ctx.maps)).length;
+  const withUser = st[0].authInactive + st[0].disabled;
   const next: string[] = [];
-  if (toCheck.length > checked) { next.push(`validate ${fmtNum(toCheck.length - checked)} scrapped/inactive notebooks, monitors, accessories`); }
-  if (open.length) { next.push(`complete ${open.length} PO validations`); }
+  if (toCheck.length > checked) { next.push(`validate ${fmtNum(toCheck.length - checked)} scrapped / inactive devices`); }
+  if (open.length) { next.push(`complete PO validations (${open.length})`); }
   if (blankPo) { next.push(`add PurchaseNo to ${fmtNum(blankPo)} new assets`); }
   if (rc.removed.length) { next.push(`review ${fmtNum(rc.removed.length)} removed assets`); }
-  ppt.push(`Create a 4-slide executive summary in this VOIS template, using its layouts, colours and fonts. Audience: IT asset ` +
-    "leadership. No agenda or closing slide. Each slide title states the key message in under 10 words. Max 4 bullets per slide, " +
-    "max 12 words each. Show numbers as large figures or simple tables. Use only these numbers, exactly as written.");
-  ppt.push(`Slide 1 - VCAMS asset reconciliation, ${curName}. Large figures: ${fmtNum(rc.curRows)} assets (${signed(net)} vs ${prevName}), ` +
-    `${fmtNum(rc.newAssets.length)} new, ${fmtNum(rc.operational.length)} scrapped/inactive/lost.` +
-    (biggest ? ` Message: change driven by ${biggest[0]} ${signed(+biggest[1])}.` : ""));
-  ppt.push(`Slide 2 - Inventory movement. Table Group | ${prevName} | ${curName} | Change: ` +
-    groups.filter(x => x.g !== UNLISTED || x.p || x.c).map(x => `${x.g} | ${fmtNum(x.p)} | ${fmtNum(x.c)} | ${signed(x.c - x.p)}`).join("; ") +
-    `; Total | ${fmtNum(rc.prevRows)} | ${fmtNum(rc.curRows)} | ${signed(net)}. Bullet: new by type ${top(countBy(rc.newAssets.map(a => a.assetClass)), 3) || "none"}.`);
-  ppt.push(`Slide 3 - Scrapped, inactive and lost. Table Status | Assets: ` + groupsByStatus.map(g => `${g[0]} | ${fmtNum(g[1].length)}`).join("; ") +
-    `. Bullets: main reasons ${reasonTop || "none"}; validation ${fmtNum(checked)} of ${fmtNum(toCheck.length)} notebooks, monitors and accessories done.`);
-  ppt.push(`Slide 4 - POs, stock and next steps. Bullets: ${po.length - po.filter(x => x[7] !== PO_RESULTS.matched).length} of ${po.length} POs matched; ` +
-    `stock utilization notebooks ${pctOf(st[0])}, headsets ${pctOf(st[1])} (wired ${pctOf(st[2])}, wireless ${pctOf(st[3])}); ` +
-    `next steps: ${next.slice(0, 3).join("; ") || "none"}.`);
+  slides.push({ name: "Stock utilization and next steps", title: `Utilization: notebooks ${pctOf(st[0])}, headsets ${pctOf(st[1])}`,
+    kpis: [["Notebooks", pctOf(st[0])], ["Wired headsets", pctOf(st[2])], ["Wireless headsets", pctOf(st[3])],
+      ["Notebooks in stock", fmtNum(st[0].stock)]],
+    bullets: [withUser ? `In use includes ${fmtNum(withUser)} inactive / disabled notebooks still with users` :
+      `${fmtNum(st[0].use)} notebooks in use, ${fmtNum(st[0].stock)} in stock`,
+      outFu ? `Not counted: ${fmtNum(outFu)} in scrap warehouse / unreturned` : ""].filter(t => t)
+      .concat(next.length ? [`Next: ${next.slice(0, 2).join("; ")}`] : []),
+    charts: [{ title: "Utilization: in use vs in stock", kind: "stacked100", header: ["Category", "In use", "In stock"],
+      rows: [st[0], st[2], st[3]].concat(st.slice(4)).map(x => [x.label.trim(), x.use, x.stock] as Cell[]), colors: [BRAND, "#BFBFBF"] }] });
+
+  // Copilot in PowerPoint: one prompt, one row per slide (Microsoft: start from the template, give the exact content and
+  // layout per slide). Charts are pasted from the PPT Slides tab into the "[Paste chart]" boxes afterwards.
+  const ppt: string[] = [];
+  ppt.push("Using this VOIS template (its layouts, colours, fonts), create a title slide and exactly the 4 slides below; no agenda " +
+    "or closing slide. Audience: IT leadership. Use titles and numbers exactly as written. Slides 1-4 layout: under the title a row " +
+    "of 4 KPI cards (big number, small label below); below, bullets on the left half and, on the right half, one empty box " +
+    "per [Chart] text, for charts I paste later.");
+  ppt.push(`Title slide: "VCAMS Asset Reconciliation - ${curName}". Subtitle: "Spider data integrity, ${prevName} to ${curName}".`);
+  slides.forEach((s, i) => ppt.push(`Slide ${i + 1}: "${s.title}". Cards: ` + s.kpis.map(k => `${k[1]} ${k[0]}`).join(" | ") +
+    ". Bullets: " + s.bullets.join("; ") + ". Box: " + s.charts.filter(c => c.rows.length).map(c => `[Chart: ${c.title}]`).join(" ") + "."));
   const d = rc.curDay || ctx.asOf, n = d.getUTCDate();
   const th = n % 10 === 1 && n !== 11 ? "st" : n % 10 === 2 && n !== 12 ? "nd" : n % 10 === 3 && n !== 13 ? "rd" : "th";
   const attachment = `Spider Data Integrity - ${n}${th} of ${monthName(monthOf(d)).split(" ")[0]}`;
-  return { subject, attachment, email, heads, ppt };
+  return { subject, attachment, email, heads, ppt, slides };
 }
 
 // ============================================================================ checks
@@ -2371,9 +2430,9 @@ const BRAND = "#E60000", DARK = "#333333", GREY = "#595959";
 // REPORT_ONLY: the workbook holds only what the team sends every month (the reconciliation tabs and the email), plus
 // Stock & Utilisation. false = the full audit (integrity score, exceptions, leavers, lifecycle, ...).
 const REPORT_ONLY = true;
-const REPORT_SHEETS = ["Monthly Email", "Pivot & Summary", "New Assets", "Removed Assets", "Serial Number Changes",
+const REPORT_SHEETS = ["Monthly Email", "PPT Slides", "Pivot & Summary", "New Assets", "Removed Assets", "Serial Number Changes",
   "Scrap & Inactive Assets", "POs Validated", "Stock & Utilisation", "Glossary", "Mappings"];
-const SHEETS = ["Start Here", "Monthly Email", "Executive Summary", "Monthly KPIs", "Pivot & Summary", "New Assets", "Removed Assets",
+const SHEETS = ["Start Here", "Monthly Email", "PPT Slides", "Executive Summary", "Monthly KPIs", "Pivot & Summary", "New Assets", "Removed Assets",
   "Serial Number Changes", "Scrap & Inactive Assets", "POs Validated", "Quality Checks", "Integrity Score", "Exceptions", "Duplicates",
   "Users & Leavers", "Reconciliation", "Stock & Utilisation", "Lifecycle", "Since Last Audit", "Inventory Overview",
   "Physical Check", "All Assets", "Glossary"];
@@ -2383,7 +2442,7 @@ function newSheet(wb: ExcelScript.Workbook, name: string, title: string, subtitl
   if (old) { old.delete(); }
   const ws = wb.addWorksheet(name);
   ws.setShowGridlines(false);
-  ws.setTabColor(SHEETS.indexOf(name) >= 0 && SHEETS.indexOf(name) < 4 ? BRAND : name === MAPPINGS_SHEET ? "#2E7D32" : DARK);
+  ws.setTabColor(SHEETS.indexOf(name) >= 0 && SHEETS.indexOf(name) < 5 ? BRAND : name === MAPPINGS_SHEET ? "#2E7D32" : DARK);
   const t = ws.getRange("A1");
   t.setValue(title);
   t.getFormat().getFont().setSize(16);
@@ -2741,7 +2800,20 @@ function buildGuideSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
       "From Scrap & Inactive Assets (reasons and your validation)."],
     ["Email body - 5. Stock utilization", "Notebooks and headsets (wired / wireless): in use, in stock, utilization, deployed, months of cover; then what is not counted.",
       "From Stock & Utilisation."],
-    ["Copilot in PowerPoint prompt", "A 4-slide executive summary with this month's numbers.", "Open a new presentation from the VOIS template, open Copilot, paste the rows."]]);
+    ["Copilot in PowerPoint prompt", "A title slide and 4 slides: each with its message as the title, 4 KPI cards, short bullets and an empty [Chart] box.",
+      "Open a new presentation from the VOIS template, open Copilot, paste the rows. Then paste the charts from PPT Slides into the [Chart] boxes."]]);
+
+  tab(PPT_SHEET, "The 4 slides with their charts, ready to paste into PowerPoint", [
+    ["How to build the deck", "The 4 steps: Copilot prompt, paste the charts, fix a slide with Copilot, check the numbers.",
+      "Copilot lays out slides and text well but does not draw reliable charts from numbers, so the charts come from Excel."],
+    ["Slide 1 - Overview", "Total assets, change vs last month, new and removed; chart: assets by value group, last month vs this month.", "From Pivot & Summary."],
+    ["Slide 2 - New assets and POs", "New assets, POs matched, PO validations open, new assets without PurchaseNo; charts: new assets by type, PO results.",
+      "From New Assets and POs Validated. Biggest 6 types, the rest as Other."],
+    ["Slide 3 - Scrapped, inactive and lost", `Counts per status and validation done; charts: status changes by asset type, validation progress for ${validateTypes}.`,
+      "From Scrap & Inactive Assets. Green = validated, amber = under investigation, red = not validated, grey = not checked yet."],
+    ["Slide 4 - Stock utilization and next steps", "Utilization of notebooks, wired and wireless headsets, notebooks in stock; chart: in use vs in stock (100%).",
+      "From Stock & Utilisation. Next steps: what is still open this month."],
+    ["Chart tables", "The numbers under each chart, in a small table under the bullets.", "Change a number there and the chart follows (the next run rebuilds the tab)."]]);
 
   tab(SUMMARY_SHEET, "The month's numbers in one place, linked to the detail tabs", [
     ["1. Key figures", "Totals, net movement, new, removed, serial changes, status changes, Scrapped / Inactive / Lost / Stolen, PO lines not matched, " +
@@ -3034,7 +3106,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
     buildEmailSheet(wb, ctx);
   } else {
     buildStockSheet(wb, ctx);
-    reconSheets.concat([EMAIL_SHEET]).forEach(n => { const w = wb.getWorksheet(n); if (w) { w.delete(); } });
+    reconSheets.concat([EMAIL_SHEET, PPT_SHEET]).forEach(n => { const w = wb.getWorksheet(n); if (w) { w.delete(); } });
     // The user's PO data is kept on its sheet even without a previous export
     if (ctx.po.rows.length) {
       const ws0 = newSheet(wb, PO_SHEET, "POs Validated", "Supplied by the user. PO reconciliation needs the previous export (new assets).");
@@ -3413,7 +3485,7 @@ const CHECK_NEEDS: Record<string, string> = {
 };
 
 // ============================================================================ reconciliation sheets
-const PO_SHEET = "POs Validated", SUMMARY_SHEET = "Pivot & Summary", EMAIL_SHEET = "Monthly Email";
+const PO_SHEET = "POs Validated", SUMMARY_SHEET = "Pivot & Summary", EMAIL_SHEET = "Monthly Email", PPT_SHEET = "PPT Slides";
 // Monthly Email: the email to copy into Outlook and the prompt to copy into Copilot in PowerPoint, one line per row
 // (copying several rows gives clean lines; one cell with line breaks would be copied with quotes around it)
 function buildEmailSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
@@ -3445,10 +3517,97 @@ function buildEmailSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
     `If Outlook shows a grid, use Paste Options > Keep Text Only. Replace each ${EMAIL_NOTE} with what the investigation found.`, rep.email, rep.heads);
   const prompt = rep.ppt.join(" ");
   const pptFirst = r + 2;
-  r = block("Copilot in PowerPoint prompt", "Open a new presentation from the VOIS template, open Copilot, then select " +
-    `B${pptFirst + 1}:B${pptFirst + rep.ppt.length}, copy and paste it as the prompt. ${prompt.length.toLocaleString("en-US")} characters` +
-    (prompt.length > COPILOT_PROMPT_LIMIT ? ` - longer than ${COPILOT_PROMPT_LIMIT.toLocaleString("en-US")}: if Copilot cuts it, paste the first two rows, then ask it to add slide 3 with the last row.` : "."),
-  rep.ppt, []);
+  r = block("Copilot in PowerPoint prompt", "Step 1: new presentation from the VOIS template, open Copilot, select " +
+    `B${pptFirst + 1}:B${pptFirst + rep.ppt.length}, copy and paste it as the prompt (${prompt.length.toLocaleString("en-US")} characters` +
+    (prompt.length > COPILOT_PROMPT_LIMIT ? ` - if Copilot cuts it, paste rows 1-4 first, then "Add these slides:" with the rest).` : ").") +
+    ` Step 2: paste the charts from the ${PPT_SHEET} tab into the [Chart] boxes.`, rep.ppt, []);
+  link(ws, r - 1, 1, `Open ${PPT_SHEET} (charts to paste) ›`, PPT_SHEET);
+  buildPptSheet(wb, ctx, rep);
+}
+// PPT Slides: one block per slide - its title, KPI cards, bullets and the chart(s) as real Excel charts in VOIS colours,
+// with the numbers under them. The charts are pasted into PowerPoint (Copilot does not draw charts reliably from a prompt).
+function buildPptSheet(wb: ExcelScript.Workbook, ctx: Ctx, rep: MonthlyReport): void {
+  progress("Writing PPT Slides");
+  const ws = newSheet(wb, PPT_SHEET, "PowerPoint slides and charts - " + monthName(ctx.recon.curPeriod), "One block per slide: " +
+    "the slide title, KPI cards, bullets and the chart to paste. Built from this run's numbers.");
+  link(ws, 2, 1, "‹ Back to Monthly Email", EMAIL_SHEET);
+  ws.getRangeByIndexes(0, 0, 1, 1).getFormat().setColumnWidth(20);
+  ws.getRangeByIndexes(0, 1, 1, 4).getFormat().setColumnWidth(150);
+  ws.getRangeByIndexes(0, 5, 1, 1).getFormat().setColumnWidth(30);
+  let r = sectionTitle(ws, 4, "How to build the deck", undefined, 1);
+  const how = [
+    "1. PowerPoint: New > VOIS template. Open Copilot and paste the prompt from the Monthly Email tab. It builds the title slide and 4 slides.",
+    "2. For each slide below: click the chart's border, Ctrl+C; on the slide click the [Chart] box, delete it, Ctrl+V (Paste Options > Keep Source Formatting).",
+    "3. A slide looks off? Select it and ask Copilot: \"Make the numbers on this slide large KPI cards\" or \"Shorten the bullets to 8 words each\".",
+    "4. Check the numbers against Pivot & Summary before presenting."];
+  putValues(ws, r, 1, how.map(t => [t]));
+  r += how.length + 1;
+  rep.slides.forEach((s, i) => {
+    r = sectionTitle(ws, r, `Slide ${i + 1} - ${s.name}`, undefined, 1);
+    putValues(ws, r, 1, [[s.title]]);
+    ws.getRangeByIndexes(r, 1, 1, 1).getFormat().getFont().setSize(16);
+    ws.getRangeByIndexes(r, 1, 1, 1).getFormat().getFont().setBold(true);
+    ws.getRangeByIndexes(r, 1, 1, 1).getFormat().getFont().setColor(DARK);
+    const top = r + 2;
+    // KPI cards: the label small and grey, the number large and red, on a light grey card
+    putValues(ws, top, 1, [s.kpis.map(k => k[0] as Cell), s.kpis.map(k => k[1] as Cell)]);
+    ws.getRangeByIndexes(top + 1, 1, 1, s.kpis.length).setNumberFormat("@");
+    ws.getRangeByIndexes(top, 1, 2, s.kpis.length).getFormat().getFill().setColor("#F2F2F2");
+    ws.getRangeByIndexes(top, 1, 2, s.kpis.length).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    ws.getRangeByIndexes(top, 1, 1, s.kpis.length).getFormat().getFont().setColor(GREY);
+    ws.getRangeByIndexes(top + 1, 1, 1, s.kpis.length).getFormat().getFont().setSize(22);
+    ws.getRangeByIndexes(top + 1, 1, 1, s.kpis.length).getFormat().getFont().setBold(true);
+    ws.getRangeByIndexes(top + 1, 1, 1, s.kpis.length).getFormat().getFont().setColor(BRAND);
+    ws.getRangeByIndexes(top + 1, 1, 1, 1).getFormat().setRowHeight(34);
+    putValues(ws, top + 3, 1, s.bullets.map(t => ["• " + t]));
+    // The chart data (small tables under the bullets) and the charts beside the block: column G, a second one from Q
+    let dr = top + 4 + s.bullets.length;
+    s.charts.forEach((c, j) => {
+      const at = top, c0 = j ? 16 : 6;
+      if (!c.rows.length) {
+        putValues(ws, at, c0, [[`${c.title}: nothing to show this month`]]);
+        ws.getRangeByIndexes(at, c0, 1, 1).getFormat().getFont().setItalic(true);
+        return;
+      }
+      const head = dr;
+      dr = addTable(ws, dr, `tblPptS${i + 1}C${j + 1}`, c.header, c.rows, { widths: [], col: 1,
+        count: c.header.map((h, k) => k).filter(k => k > 0) }) - 1;
+      try {
+        const chart = ws.addChart(c.kind === "column" ? ExcelScript.ChartType.columnClustered : c.kind === "bar" ?
+          ExcelScript.ChartType.barClustered : c.kind === "stacked" ? ExcelScript.ChartType.barStacked : c.kind === "stacked100" ?
+          ExcelScript.ChartType.barStacked100 : ExcelScript.ChartType.doughnut,
+          ws.getRangeByIndexes(head, 1, c.rows.length + 1, c.header.length), ExcelScript.ChartSeriesBy.columns);
+        chart.setName(`Slide${i + 1}Chart${j + 1}`);
+        chart.setPosition(`${colLetter(c0)}${at + 1}`, `${colLetter(c0 + 8)}${at + 16}`);
+        chart.getTitle().setText(c.title);
+        chart.getTitle().getFormat().getFont().setSize(13);
+        chart.getTitle().getFormat().getFont().setBold(true);
+        chart.getTitle().getFormat().getFont().setColor(DARK);
+        chart.getLegend().setPosition(ExcelScript.ChartLegendPosition.bottom);
+        chart.getLegend().setVisible(c.kind === "doughnut" || c.header.length > 2);
+        if (c.kind === "doughnut") {
+          chart.getSeries()[0].setDoughnutHoleSize(55);
+          chart.getSeries()[0].setHasDataLabels(true);
+          chart.getSeries()[0].getPoints().forEach((pt, k) => pt.getFormat().getFill()
+            .setSolidColor(RESULT_COLOURS[String(c.rows[k][0])] || ["#4A4D4E", "#A6A6A6", "#E60000", "#F2A900", "#7F7F7F"][k % 5]));
+        } else {
+          chart.getSeries().forEach((se, k) => {
+            se.getFormat().getFill().setSolidColor(c.colors[k] || GREY);
+            se.setHasDataLabels(true);
+            se.setGapWidth(60);
+          });
+          chart.getAxes().getValueAxis().getMajorGridlines().setVisible(false);
+          chart.getAxes().getValueAxis().setVisible(false);
+          // Bars: the biggest at the top, as in the table
+          if (c.kind !== "column") { chart.getAxes().getCategoryAxis().setReversePlotOrder(true); }
+        }
+        chart.getName();
+      } catch (e) {
+        putValues(ws, at, c0, [[`${c.title}: Excel could not draw this chart - select the table on the left, Insert > Chart.`]]);
+      }
+    });
+    r = Math.max(dr + 1, top + 17) + 1;
+  });
 }
 const NEW_HEADER = ["Asset no.", "Serial no.", "Asset status", "Asset Type", "Model", "Purchase date", "PurchaseNo", "Last scan",
   "Scandate Age in Days", "Function Unit", "AssetCreationDate", "Creation Age in Days", "AssetUpdateDate"];

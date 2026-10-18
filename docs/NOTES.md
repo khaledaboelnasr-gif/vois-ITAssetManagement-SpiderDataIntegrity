@@ -100,8 +100,11 @@ The spec is the "Monthly Asset Reconciliation Copilot Agent" instructions, writt
   Reserved counts as stock. Function Units "VOIS_EG Scrape Warehouse" and "VOIS_EG Unreturned Devices" are left out by
   default (user decision, 2026-10-18) and reported on the Stock tab (5: summary by unit, category, status, model; 6: every
   asset) and in the email's section 5.
-- **PowerPoint prompt (2026-10-18):** 4 executive slides (at a glance, inventory movement, scrapped / inactive / lost with
-  validation, POs + stock + next steps); titles state the message; numbers as large figures and tables.
+- **PowerPoint (2026-10-18, v14):** Copilot did not give a presentable deck from numbers alone, so the work is split:
+  the **PPT Slides** tab draws the charts as real Excel charts in VOIS colours (one block per slide: title, 4 KPI cards,
+  bullets, chart data, charts), and the Copilot prompt builds a title slide + 4 slides (Overview; New assets and POs;
+  Scrapped, inactive and lost; Stock utilization and next steps) with the message as the title, 4 KPI cards, bullets and
+  an empty [Chart] box per chart. The user pastes the charts into the boxes. Prompt kept under 2,000 characters.
 - **Email 2.1** lists, under each PO, its models on Spider (type - model: count) and the PO lines not on Spider yet.
 
 - **Stock utilisation = Notebooks and Headsets only (user decision, 2026-10-18).** Headsets = type "Headset" plus

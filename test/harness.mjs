@@ -69,7 +69,7 @@ class Range {
 }
 class Sheet {
   constructor(name, values) { this.name = name; this.values = values || []; this.cells = new Map(); this.tables = []; this.fmt = new Map();
-    this.colW = {}; this.tableRanges = []; this.pivots = []; }
+    this.colW = {}; this.tableRanges = []; this.pivots = []; this.charts = []; }
   style(k) { let s = this.fmt.get(k); if (!s) { s = {}; this.fmt.set(k, s); } return s; }
   getName() { return this.name; }
   size() { let h = 0, w = 0; for (const k of this.cells.keys()) { const [r, c] = k.split(",").map(Number); h = Math.max(h, r + 1); w = Math.max(w, c + 1); } return [h, w]; }
@@ -87,6 +87,19 @@ class Sheet {
     const pv = { name, table: table.getName(), r: dest.r, c: dest.c, rows: [], value: "", sum: false };
     this.pivots.push(pv);
     return wrap({ getHierarchy: h => ({ h }), addRowHierarchy: x => { pv.rows.push(x.h); }, addDataHierarchy: x => { pv.value = x.h; return wrap({ setSummarizeBy: f => { pv.sum = f === "sum"; } }); } });
+  }
+  // A chart records its type, source, position, title and colours (for RENDER); the source must hold numbers
+  addChart(type, rng, by) {
+    const ch = { type, r: rng.r, c: rng.c, h: rng.h, w: rng.w, title: "", colors: [], pos: "", ws: this };
+    if (rng.h < 2 || rng.w < 2) throw new Error(`chart source too small on ${this.name}`);
+    for (let i = 1; i < rng.h; i++) for (let j = 1; j < rng.w; j++) { const v = this.cells.get(`${rng.r + i},${rng.c + j}`);
+      if (typeof v !== "number") throw new Error(`chart source not a number (${v}) on ${this.name} r${rng.r + i} c${rng.c + j}`); }
+    this.charts.push(ch);
+    const fill = i => wrap({ getFill: () => wrap({ setSolidColor: v => { ch.colors[i] = v; } }) });
+    const series = i => wrap({ getFormat: () => fill(i), getPoints: () => Array.from({ length: rng.h - 1 }, (_, k) => wrap({ getFormat: () => fill(k) })) });
+    return wrap({ setPosition: (a, b) => { ch.pos = `${a}:${b}`; }, setName: n => { ch.name = n; }, getName: () => ch.name,
+      getTitle: () => wrap({ setText: t => { ch.title = t; } }),
+      getSeries: () => Array.from({ length: /doughnut/.test(type) ? 1 : rng.w - 1 }, (_, i) => series(i)) });
   }
   getFreezePanes() { return any; } setPosition() {} setShowGridlines() {} setTabColor() {} activate() {}
   delete() { wb.sheets = wb.sheets.filter(s => s.name !== this.name); this.tables.forEach(n => wb.tableNames.delete(n)); }
@@ -234,6 +247,48 @@ if (process.env.RENDER) {
     walk(rows, 0); put(pv.c, "Grand Total", "ph"); put(pv.c + 1, rows.reduce((a, r) => a + val(r), 0), "ph");
     return out;
   };
+  // A chart as a simple SVG at its position (columns, bars, stacked bars or a doughnut, in the colours set)
+  const chartSvg = (ws, ch) => {
+    const m = ch.pos.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/); if (!m) return "";
+    const cx = c => 32 + Array.from({ length: c }, (_, j) => Math.round((ws.colW[j] || 48) * 1.33)).reduce((x, y) => x + y, 0);
+    const x0 = cx(colIdx(m[1])), y0 = 22 + 22 + (+m[2] - 1) * 22, W = cx(colIdx(m[3]) + 1) - x0, H = (+m[4] - +m[2] + 1) * 22;
+    const cell = (i, j) => ws.cells.get(`${ch.r + i},${ch.c + j}`);
+    const cats = Array.from({ length: ch.h - 1 }, (_, i) => String(cell(i + 1, 0))), ser = Array.from({ length: ch.w - 1 }, (_, j) => String(cell(0, j + 1)));
+    const val = (i, j) => Number(cell(i + 1, j + 1)) || 0, col = j => ch.colors[j] || "#888";
+    let g = `<text x="${W / 2}" y="20" text-anchor="middle" font-weight="bold" font-size="13">${esc(ch.title)}</text>`;
+    const pt = 34, pb = 40, pl = /bar/i.test(ch.type) ? 130 : 20, pw = W - pl - 20, ph = H - pt - pb;
+    if (/doughnut/i.test(ch.type)) {
+      const tot = cats.reduce((a, _, i) => a + val(i, 0), 0) || 1, R = Math.min(pw, ph) / 2 - 5, ccx = W / 2, ccy = pt + ph / 2;
+      let a = -Math.PI / 2;
+      cats.forEach((c, i) => { const b = a + 2 * Math.PI * val(i, 0) / tot, big = b - a > Math.PI ? 1 : 0;
+        const p = (t, r) => `${ccx + r * Math.cos(t)},${ccy + r * Math.sin(t)}`;
+        g += val(i, 0) >= tot ? `<circle cx="${ccx}" cy="${ccy}" r="${R * 0.78}" fill="none" stroke="${col(i)}" stroke-width="${R * 0.45}"/>` :
+          `<path d="M${p(a, R)} A${R},${R} 0 ${big} 1 ${p(b, R)} L${p(b, R * 0.55)} A${R * 0.55},${R * 0.55} 0 ${big} 0 ${p(a, R * 0.55)}Z" fill="${col(i)}"/>`;
+        a = b; });
+      g += `<text x="10" y="${H - 8}" font-size="10">${cats.map((c, i) => `<tspan fill="${col(i)}">■</tspan> ${esc(c)} ${val(i, 0)}`).join("  ")}</text>`;
+    } else {
+      const stacked = /Stacked/.test(ch.type), pct = /100/.test(ch.type), horiz = /bar/i.test(ch.type);
+      const tot = i => ser.reduce((a, _, j) => a + val(i, j), 0);
+      const max = Math.max(1, ...cats.map((_, i) => pct ? 1 : stacked ? tot(i) : Math.max(...ser.map((_, j) => val(i, j)))));
+      const band = (horiz ? ph : pw) / cats.length;
+      cats.forEach((c, i) => {
+        let acc = 0;
+        ser.forEach((s, j) => {
+          const v = pct ? val(i, j) / (tot(i) || 1) : val(i, j), len = v / max * (horiz ? pw : ph);
+          const k = stacked ? 0 : j, n = stacked ? 1 : ser.length, th = band * 0.6 / n, off = band * 0.2 + k * th;
+          if (horiz) { g += `<rect x="${pl + acc}" y="${pt + i * band + off}" width="${len}" height="${th}" fill="${col(j)}"/>` +
+            `<text x="${pl + acc + len / 2}" y="${pt + i * band + off + th / 2 + 4}" font-size="10" text-anchor="middle" fill="#fff">${val(i, j) || ""}</text>`; }
+          else { g += `<rect x="${pl + i * band + off}" y="${pt + ph - len}" width="${th}" height="${len}" fill="${col(j)}"/>` +
+            `<text x="${pl + i * band + off + th / 2}" y="${pt + ph - len - 3}" font-size="10" text-anchor="middle">${val(i, j)}</text>`; }
+          if (stacked) acc += len;
+        });
+        g += horiz ? `<text x="${pl - 6}" y="${pt + i * band + band / 2 + 4}" font-size="10" text-anchor="end">${esc(c)}</text>` :
+          `<text x="${pl + i * band + band / 2}" y="${pt + ph + 14}" font-size="10" text-anchor="middle">${esc(c)}</text>`;
+      });
+      if (ser.length > 1) g += `<text x="10" y="${H - 6}" font-size="10">${ser.map((s, j) => `<tspan fill="${col(j)}">■</tspan> ${esc(s)}`).join("  ")}</text>`;
+    }
+    return `<svg style="position:absolute;left:${x0}px;top:${y0}px;background:#fff;border:1px solid #D9D9D9" width="${W}" height="${H}" font-family="Calibri,Arial">${g}</svg>`;
+  };
   fs.mkdirSync(process.env.RENDER, { recursive: true });
   wb.sheets.filter(ws => !ws.values.length).forEach(ws => {
     const piv = new Map(); ws.pivots.forEach(pv => pivotCells(ws, pv).forEach((x, k) => piv.set(k, x)));
@@ -266,7 +321,8 @@ th{background:#f3f3f3;color:#666;font-weight:normal;font-size:9pt;border:1px sol
       }
       html += "</tr>";
     }
-    fs.writeFileSync(`${process.env.RENDER}/${ws.name.replace(/[^A-Za-z0-9]+/g, "_")}.html`, html + "</table></body></html>");
+    html += "</table>" + ws.charts.map(ch => chartSvg(ws, ch)).join("");
+    fs.writeFileSync(`${process.env.RENDER}/${ws.name.replace(/[^A-Za-z0-9]+/g, "_")}.html`, html + "</body></html>");
   });
   console.log("rendered to", process.env.RENDER);
 }

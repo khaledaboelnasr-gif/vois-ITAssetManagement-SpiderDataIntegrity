@@ -56,7 +56,7 @@ It follows the same pattern as [vois-ticket-review](https://github.com/khaledabo
    - optionally, a `PO Validation` tab with the user's PO rows.
 2. In Excel on the web, go to **Automate > New script**, paste `asset_audit_officescript.ts`, and run it.
 3. The workbook gets only the monthly report tabs: **Monthly Email** (the email ready to copy into Outlook, and a
-   prompt for Copilot in PowerPoint), **Pivot & Summary**, **New Assets**, **Removed Assets** (when any),
+   prompt for Copilot in PowerPoint), **PPT Slides** (the charts to paste into the slides), **Pivot & Summary**, **New Assets**, **Removed Assets** (when any),
    **Serial Number Changes**, **Scrap & Inactive Assets**, **POs Validated** and **Stock & Utilisation**.
    For the full audit tabs, set `REPORT_ONLY = false` near the top of the sheet-building code.
 
@@ -75,7 +75,7 @@ The harness prints `excel calls` (about 4,000 for 5,000 rows and for 100,000 row
 
 ```bash
 python3 gen_synthetic.py 100000 > big.json
-MAXCALLS=6000 NORERUN=1 node harness.mjs ../asset_audit_officescript.ts big.json
+MAXCALLS=7000 NORERUN=1 node harness.mjs ../asset_audit_officescript.ts big.json
 ```
 
 To see how the tabs look, render them as pictures (needs Playwright, which is only a dev tool):
