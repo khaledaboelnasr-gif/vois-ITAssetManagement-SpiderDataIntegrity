@@ -1,5 +1,5 @@
 VOIS ASSET AUDIT SCRIPT - OVERVIEW
-Script version 2026.10.18.2
+Script version 2026.10.18.3
 ====================================================================
 
 Use this to review the script and ask for changes. To ask for a change,

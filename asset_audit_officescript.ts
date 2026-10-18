@@ -231,7 +231,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.18.2";
+const SCRIPT_VERSION = "2026.10.18.3";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -2401,6 +2401,13 @@ function link(ws: ExcelScript.Worksheet, row: number, col: number, text: string,
   ws.getRangeByIndexes(row, col, 1, 1).getFormat().getFont().setColor("#0563C1");
   ws.getRangeByIndexes(row, col, 1, 1).getFormat().getFont().setUnderline(ExcelScript.RangeUnderlineStyle.single);
 }
+// The data cells of one column of a table, as a plain address ('New Assets'!D5:D2772); "" when there is no such column
+function tableColumn(wb: ExcelScript.Workbook, table: string, header: string): string {
+  const t = wb.getTable(table);
+  if (!t) { return ""; }
+  const i = (t.getHeaderRowRange().getValues()[0] as Raw[]).map(v => String(v)).indexOf(header);
+  return i < 0 ? "" : t.getRangeBetweenHeaderAndTotal().getColumn(i).getAddress();
+}
 // Row 3 of the detail tabs: back to the summary
 function backLink(ws: ExcelScript.Worksheet): void {
   link(ws, 2, 0, "‹ Back to Pivot & Summary", SUMMARY_SHEET);
@@ -2525,39 +2532,48 @@ function buildSummarySheet(wb: ExcelScript.Workbook, ctx: Ctx, notes: string[]):
   rows.push(["Grand total", rc.prevRows, rc.curRows - rc.prevRows, rc.curRows, live ? "OK" : ""]); kinds.push("grand");
 
   // --- 1 Key figures: [label, value, formula (or ""), number format, link target (or "")]
+  // Formulas use plain cell ranges (e.g. 'New Assets'!D5:D2772), read from each table's position, not table-column
+  // references: Excel on the web rejected one of those (2026-10-18)
+  const tc = (table: string, header: string) => tableColumn(wb, table, header);
+  const f = (text: string, ...cols: string[]) => cols.every(c => c) ? text : "";
+  const newType = tc("tblNewAssets", "Asset Type"), newPo = tc("tblNewAssets", "PurchaseNo");
+  const opStatus = tc("tblStatusChanges", "Current Asset Status"), poResult = tc("tblPOReconciliation", "Reconciliation Result");
+  const util = tc("tblStockSummary", "Utilization"), serialCol = rc.serialChecked ? tc("tblSerialChanges", "Change") : "";
+  const removedCol = rc.removed.length ? tc("tblRemovedAssets", "Asset Type") : "";
   const scrapped = rc.operational.filter(c => compactKey(c.cur.status) === "scrapped").length;
   const ended = (st: string) => rc.changes.filter(c => compactKey(c.cur.status) === st).length;
   const po = poReconRows(ctx), sum = stockSummary(ctx);
   const keyTop = 5, sumTitle = keyTop + 18, sumTop = sumTitle + 2, grandRow = sumTop + 1 + rows.length;  // 0-based
   const trTitle = grandRow + 3;
+  // Status changes (section 3) sit on this sheet at known rows: header at trTitle + 2
+  const trFirst = trTitle + 4, trLast = trTitle + 3 + Math.max(1, countBy(rc.changes.map(c => c.transition)).size);
+  const trChange = `$A$${trFirst}:$A$${trLast}`, trAssets = `$B$${trFirst}:$B$${trLast}`;
   const key: [string, Cell, string, string, string][] = [
     [`Previous-month total assets (${prevName})`, rc.prevRows, `=B${grandRow}`, FMT_COUNT, at(grandRow - 1)],
     [`Current-month total assets (${curName})`, rc.curRows, `=D${grandRow}`, FMT_COUNT, at(grandRow - 1)],
     ["Net movement", rc.curRows - rc.prevRows, `=B${keyTop + 3}-B${keyTop + 2}`, FMT_DIFF, at(grandRow - 1)],
-    ["New assets", rc.newAssets.length, `=COUNTIF(tblNewAssets[Asset Type],"?*")`, FMT_COUNT, "New Assets"],
+    ["New assets", rc.newAssets.length, f(`=COUNTIF(${newType},"?*")`, newType), FMT_COUNT, "New Assets"],
     ["   of which with an empty PurchaseNo", rc.newAssets.filter(a => !a.po).length,
-      `=COUNTIFS(tblNewAssets[Asset Type],"?*",tblNewAssets[PurchaseNo],"")`, FMT_COUNT, "New Assets"],
-    ["Removed assets (to review)", rc.removed.length, rc.removed.length ? `=COUNTIF(tblRemovedAssets[Asset Type],"?*")` : "", FMT_COUNT,
-      rc.removed.length ? "Removed Assets" : ""],
-    ["Serial number changes", rc.serialChecked ? rc.serialChanges.length : "Not checked",
-      rc.serialChecked ? `=COUNTIF(tblSerialChanges[Change],"?*")` : "", FMT_COUNT, rc.serialChecked ? "Serial Number Changes" : ""],
-    ["All status changes", rc.changes.length, "=SUM(tblStatusTransitions[Assets])", FMT_COUNT, at(trTitle)],
-    ["Scrapped (new this month)", scrapped, `=COUNTIF(tblStatusChanges[Current Asset Status],"Scrapped")`, FMT_COUNT, "Scrap & Inactive Assets"],
-    ["Inactive (new this month)", ended("inactive"), `=SUMIFS(tblStatusTransitions[Assets],tblStatusTransitions[Status Change],"*→ Inactive")`, FMT_COUNT, at(trTitle)],
-    ["Lost (new this month)", ended("lost"), `=COUNTIF(tblStatusChanges[Current Asset Status],"Lost")`, FMT_COUNT, "Scrap & Inactive Assets"],
-    ["Stolen (new this month)", ended("stolen"), `=SUMIFS(tblStatusTransitions[Assets],tblStatusTransitions[Status Change],"*→ Stolen")`, FMT_COUNT, at(trTitle)],
+      f(`=COUNTIFS(${newType},"?*",${newPo},"")`, newType, newPo), FMT_COUNT, "New Assets"],
+    ["Removed assets (to review)", rc.removed.length, f(`=COUNTIF(${removedCol},"?*")`, removedCol), FMT_COUNT, rc.removed.length ? "Removed Assets" : ""],
+    ["Serial number changes", rc.serialChecked ? rc.serialChanges.length : "Not checked", f(`=COUNTIF(${serialCol},"?*")`, serialCol), FMT_COUNT,
+      rc.serialChecked ? "Serial Number Changes" : ""],
+    ["All status changes", rc.changes.length, `=SUM(${trAssets})`, FMT_COUNT, at(trTitle)],
+    ["Scrapped (new this month)", scrapped, f(`=COUNTIF(${opStatus},"Scrapped")`, opStatus), FMT_COUNT, "Scrap & Inactive Assets"],
+    ["Inactive (new this month)", ended("inactive"), `=SUMIF(${trChange},"*→ Inactive",${trAssets})`, FMT_COUNT, at(trTitle)],
+    ["Lost (new this month)", ended("lost"), f(`=COUNTIF(${opStatus},"Lost")`, opStatus), FMT_COUNT, "Scrap & Inactive Assets"],
+    ["Stolen (new this month)", ended("stolen"), `=SUMIF(${trChange},"*→ Stolen",${trAssets})`, FMT_COUNT, at(trTitle)],
     ["PO lines not 'Matched'", po.filter(x => x[7] !== PO_RESULTS.matched).length,
-      `=COUNTIF(tblPOReconciliation[Reconciliation Result],"?*")-COUNTIF(tblPOReconciliation[Reconciliation Result],"Matched")`, FMT_COUNT, PO_SHEET],
-    ["Notebook stock utilization", utilOf(sum[0]), "=INDEX(tblStockSummary[Utilization],1)", "0.0%", "Stock & Utilisation"],
-    ["Headset stock utilization", utilOf(sum[1]), "=INDEX(tblStockSummary[Utilization],2)", "0.0%", "Stock & Utilisation"]
+      f(`=COUNTIF(${poResult},"?*")-COUNTIF(${poResult},"Matched")`, poResult), FMT_COUNT, PO_SHEET],
+    ["Notebook stock utilization", utilOf(sum[0]), f(`=INDEX(${util},1)`, util), "0.0%", "Stock & Utilisation"],
+    ["Headset stock utilization", utilOf(sum[1]), f(`=INDEX(${util},2)`, util), "0.0%", "Stock & Utilisation"]
   ];
   let r = sectionTitle(ws, 3, "1. Key figures", "Live: each value is a formula on the detail tab it links to");
   addTable(ws, r, "tblKeyFigures", ["Measure", "Value", "Details"], key.map(k => [k[0], k[1], ""]), { widths: [] });
+  const keyFirst = r + 1;
   key.forEach((k, i) => {
-    const cell = ws.getRangeByIndexes(r + 1 + i, 1, 1, 1);
-    cell.setNumberFormat(k[3]);
-    if (k[2] && ctx.formulas) { cell.setFormulas([[k[2]]]); }
-    if (k[4]) { link(ws, r + 1 + i, 2, k[4].indexOf("!") > 0 ? "See below ›" : `Open ${k[4]} ›`, k[4]); }
+    ws.getRangeByIndexes(keyFirst + i, 1, 1, 1).setNumberFormat(k[3]);
+    if (k[4]) { link(ws, keyFirst + i, 2, k[4].indexOf("!") > 0 ? "See below ›" : `Open ${k[4]} ›`, k[4]); }
   });
   ws.getRangeByIndexes(r + 1, 1, key.length, 1).getFormat().getFont().setBold(true);
 
@@ -2579,6 +2595,7 @@ function buildSummarySheet(wb: ExcelScript.Workbook, ctx: Ctx, notes: string[]):
     const rangeOf = (t: TabInfo) => `'${t.name.replace(/'/g, "''")}'!$${colLetter(t.colAbs.cls)}$${t.headerAbs + 2}:$${colLetter(t.colAbs.cls)}$${Math.max(t.lastAbs + 1, t.headerAbs + 2)}`;
     const pr = rangeOf(ctx.prevTabs[0]), cr = rangeOf(ctx.curTabs[0]);
     let groupStart = -1;
+    try {
     kinds.forEach((k, i) => {
       const row = top + i + 1;
       if (k === "group") { groupStart = row + 1; return; }
@@ -2594,7 +2611,12 @@ function buildSummarySheet(wb: ExcelScript.Workbook, ctx: Ctx, notes: string[]):
           `=${totals.map(x => "D" + x).join("+")}`, `=IF(AND(B${row}=${rc.prevRows},D${row}=${rc.curRows}),"OK","Differs")`]]);
       }
     });
+    ws.getRangeByIndexes(top, 1, 1, 1).getValues();  // makes Excel check the formulas now, inside this try
     notes.push("Pivot & Summary uses live SUMPRODUCT formulas on the raw export tabs");
+    } catch (e) {
+      putValues(ws, top, 1, rows.map(x => [x[1], x[2], x[3], ""]));
+      progress("Assets by type: live formulas not accepted - the script's counts are shown instead");
+    }
   }
 
   // --- 3 Status changes
@@ -2603,6 +2625,26 @@ function buildSummarySheet(wb: ExcelScript.Workbook, ctx: Ctx, notes: string[]):
   const tr = countBy(rc.changes.map(c => c.transition));
   addTable(ws, r, "tblStatusTransitions", ["Status Change", "Assets", "On Scrap & Inactive Assets?"], keysByCount(tr).map(t =>
     [t, tr.get(t) || 0, OPERATIONAL_STATUSES.some(st => t.endsWith("→ " + st)) ? "Yes" : "No"]), { widths: [], count: [1] });
+
+  // Key-figure formulas, one at a time: if Excel rejects one, the script's value stays and the run goes on
+  if (ctx.formulas) {
+    const failed: string[] = [];
+    key.forEach((k, i) => {
+      if (!k[2]) { return; }
+      const cell = ws.getRangeByIndexes(keyFirst + i, 1, 1, 1);
+      try {
+        cell.setFormulas([[k[2]]]);
+        cell.getValues();  // makes Excel check the formula now, inside this try
+      } catch (e) {
+        cell.setValues([[k[1]]]);
+        failed.push(k[0].trim());
+      }
+    });
+    if (failed.length) {
+      progress(`Key figures kept as values (formula not accepted): ${failed.join(", ")}`);
+      notes.push(`Key figures kept as values: ${failed.join(", ")}`);
+    }
+  }
 
   // --- 4-7 New assets (columns G-H)
   const by = (f: (a: Asset) => string) => { const m = countBy(rc.newAssets.map(a => f(a))); return keysByCount(m).map(k => [k, m.get(k) || 0] as Cell[]); };

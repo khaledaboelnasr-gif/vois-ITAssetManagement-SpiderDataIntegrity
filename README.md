@@ -100,6 +100,7 @@ RENDER=preview NORERUN=1 node harness.mjs ../asset_audit_officescript.ts synthet
 | `HISTOUT=<file>` | Saves `historyRows` to a file. |
 | `NORERUN=1` | Skips the re-run on the same workbook. |
 | `MAXCALLS=<n>` | Fails if the run makes more than n Excel calls (an Excel call inside a per-row loop). |
+| `TABLES=1` | Lists every table the run made, with its rows and columns. |
 | `RENDER=<dir>` | Writes an HTML picture of each result tab (formatting, links, tables, PivotTables); `screenshot.mjs <dir>` turns them into PNGs. |
 | `BRIEFOUT=<file>` | Saves the agent brief (`agentInput`), to compare two versions. |
 

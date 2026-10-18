@@ -26,6 +26,16 @@ const wrap = o => new Proxy(o, { get: (t, p) => {
 } });
 const colIdx = a => { let n = 0; for (const ch of a) n = n * 26 + ch.charCodeAt(0) - 64; return n - 1; };
 let calls = 0;
+// Rough formula check (Excel's own check is stricter): starts with =, balanced quotes and brackets, and every
+// 'Sheet'! reference names a sheet that exists
+function checkFormula(x, where) {
+  const bad = m => { throw new Error(`invalid formula on ${where}: ${m}: ${x}`); };
+  if (typeof x !== "string" || !x.startsWith("=")) bad("no leading =");
+  if ((x.match(/"/g) || []).length % 2) bad("unbalanced quotes");
+  const noStr = x.replace(/"[^"]*"/g, ""), depth = [...noStr].reduce((d, ch) => d < 0 ? d : d + (ch === "(" ? 1 : ch === ")" ? -1 : 0), 0);
+  if (depth !== 0) bad("unbalanced brackets");
+  for (const m of noStr.matchAll(/'((?:[^']|'')+)'!/g)) { const n = m[1].replace(/''/g, "'"); if (!wb.sheets.some(s => s.name === n)) bad(`no sheet '${n}'`); }
+}
 class Range {
   constructor(ws, r, c, h, w) { Object.assign(this, { ws, r, c, h, w }); }
   setValues(v) {
@@ -39,7 +49,9 @@ class Range {
   setValue(x) { this.setValues([[x]]); }
   getValues() { calls++; const v = this.ws.values.length ? this.ws.values : this.ws.grid(); return v.slice(this.r, this.r + this.h).map(r => r.slice(this.c, this.c + this.w).concat(Array(Math.max(0, this.w - (r.length - this.c))).fill(""))); }
   getRowIndex() { return this.r; } getColumnIndex() { return this.c; } getRowCount() { return this.h; } getColumnCount() { return this.w; }
-  getAddress() { return `${this.ws.name}!R${this.r}C${this.c}`; }
+  getAddress() { const L = c => { let s = ""; c++; while (c) { s = String.fromCharCode(65 + (c - 1) % 26) + s; c = Math.floor((c - 1) / 26); } return s; };
+    return `'${this.ws.name.replace(/'/g, "''")}'!${L(this.c)}${this.r + 1}:${L(this.c + this.w - 1)}${this.r + this.h}`; }
+  getColumn(i) { return wrap(new Range(this.ws, this.r, this.c + i, this.h, 1)); }
   setNumberFormat(f) { if (typeof f !== "string") throw new Error("setNumberFormat needs string"); this.each(k => this.ws.style(k).nf = f); }
   // Formatting is recorded per cell, for RENDER (a picture of each tab)
   each(fn) { for (let i = 0; i < this.h; i++) for (let j = 0; j < this.w; j++) fn(`${this.r + i},${this.c + j}`); }
@@ -52,7 +64,7 @@ class Range {
       setVerticalAlignment() {}, setHorizontalAlignment: v => set("align", v) });
   }
   addConditionalFormat() { return any; }
-  setFormulas(f) { f.forEach((row, i) => row.forEach((x, j) => this.ws.style(`${this.r + i},${this.c + j}`).formula = x)); }
+  setFormulas(f) { f.forEach((row, i) => row.forEach((x, j) => { checkFormula(x, this.ws.name); this.ws.style(`${this.r + i},${this.c + j}`).formula = x; })); }
   setHyperlink(h) { this.each(k => { this.ws.style(k).link = h.documentReference || h.address; }); if (h.textToDisplay) this.ws.cells.set(`${this.r},${this.c}`, h.textToDisplay); }
 }
 class Sheet {
@@ -91,7 +103,13 @@ const wb = { sheets: Object.keys(data).filter(n => !drop(n)).map(n => wrap(new S
   tableNames: new Set(),
   getWorksheets() { return this.sheets; }, getWorksheet(n) { return this.sheets.find(s => s.name === n); },
   getApplication() { return wrap({ getCalculationMode: () => "automatic", setCalculationMode() {} }); },
-  getTable(n) { return this.tableNames.has(String(n).toLowerCase()) ? wrap({ getName: () => n }) : undefined; },
+  getTable(n) {
+    if (!this.tableNames.has(String(n).toLowerCase())) return undefined;
+    const ws = this.sheets.find(s => s.tableRanges.some(t => t.name.toLowerCase() === String(n).toLowerCase()));
+    const t = ws.tableRanges.find(x => x.name.toLowerCase() === String(n).toLowerCase());
+    return wrap({ getName: () => n, getHeaderRowRange: () => ws.getRangeByIndexes(t.r, t.c, 1, t.w),
+      getRangeBetweenHeaderAndTotal: () => ws.getRangeByIndexes(t.r + 1, t.c, t.h - 1, t.w) });
+  },
   addWorksheet(n) { if (this.getWorksheet(n)) throw new Error("dup sheet " + n); const s = wrap(new Sheet(n)); this.sheets.push(s); return s; } };
 // REFJSON=1: compact JSON like reference_extract_officescript.ts produces
 const usersJson = process.env.REFJSON ? JSON.stringify(data["Users (Entra)"].slice(1).map(r => [r[1], "", r[2] === "False" ? "0" : "1", r[3]])) : undefined;
@@ -213,3 +231,4 @@ th{background:#f3f3f3;color:#666;font-weight:normal;font-size:9pt;border:1px sol
   });
   console.log("rendered to", process.env.RENDER);
 }
+if (process.env.TABLES) wb.sheets.forEach(s => s.tableRanges.forEach(t => console.log("table", s.name, t.name, `rows ${t.r + 1}-${t.r + t.h}`, `cols ${t.c}-${t.c + t.w - 1}`)));
