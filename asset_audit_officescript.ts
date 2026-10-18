@@ -104,7 +104,7 @@ function runAudit(workbook: ExcelScript.Workbook, auditDate?: string, previousDa
       userOk: 0, userChecked: 0 },
     stockAgeSource: cur.cols.has("statusDate") ? "status date" : cur.cols.has("updated") ? "asset update date (approximate)" :
       cur.cols.has("purchase") ? "purchase date (no status date column)" : "",
-    deploySource: "", recon: emptyRecon(), po: loadPo(workbook, tabs.po, poJson), formulas: !shareSafe && !marketFilter,
+    deploySource: "", recon: emptyRecon(), po: loadPo(workbook, tabs.po, tabs.ownPo, poJson), formulas: !shareSafe && !marketFilter,
     curTabs: cur.tabs, prevTabs: prevLoad ? prevLoad.tabs : [], tokens: []
   };
   if (prevAssets) {
@@ -231,7 +231,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.18.3";
+const SCRIPT_VERSION = "2026.10.18.5";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -865,23 +865,24 @@ function headRows(ws: ExcelScript.Worksheet): Raw[][] {
 }
 
 // Sheet NAMES, never sheet objects: Office Scripts does not allow storing Excel objects (look them up by name instead)
-interface Tabs { assets: string[]; users: string[]; devices: string[]; po: string[]; }
+interface Tabs { assets: string[]; users: string[]; devices: string[]; po: string[]; ownPo: string; }
 // Sorts the workbook's tabs into asset exports, PO validation, user references and device references. Our own
 // result sheets are skipped (so re-running on the same workbook works), except POs Validated, which echoes the
 // user's PO data and is read back when there is no other PO tab.
 function findTabs(wb: ExcelScript.Workbook, maps: Mappings): Tabs {
-  const out: Tabs = { assets: [], users: [], devices: [], po: [] };
-  let ownPo = "";
+  const out: Tabs = { assets: [], users: [], devices: [], po: [], ownPo: "" };
   wb.getWorksheets().forEach((w: ExcelScript.Worksheet) => {
     // Each Excel call is a round trip to Excel, so the name is asked for once
     const tab = w.getName();
     const own = SHEETS.indexOf(tab) >= 0 || tab === MAPPINGS_SHEET;
     if (own && tab !== PO_SHEET) { return; }
+    // The POs Validated tab made by an earlier run: its table holds the user's edits (read in loadPo)
+    if (tab === PO_SHEET) { out.ownPo = tab; return; }
     const head = headRows(w);
     if (!head.length) { return; }
     const p = bestHeader(head, PO_COLS).pos;
     if (has(p, "number") && has(p, "quantity")) {
-      if (own) { ownPo = tab; } else { out.po.push(tab); }
+      out.po.push(tab);
       return;
     }
     if (own) { return; }
@@ -905,7 +906,7 @@ function findTabs(wb: ExcelScript.Workbook, maps: Mappings): Tabs {
       out.users.push(tab);
     }
   });
-  if (!out.po.length && ownPo) { out.po.push(ownPo); }
+
   return out;
 }
 
@@ -1206,9 +1207,13 @@ function loadDevices(wb: ExcelScript.Workbook, sheets: string[], json: string | 
 
 // PO validation rows supplied by the user (poJson, or a tab with Purchase Number and Quantity). Values are kept
 // exactly as supplied; problems are reported, never fixed.
-function loadPo(wb: ExcelScript.Workbook, sheets: string[], json: string | undefined): PoData {
+// PO validation rows, from (in this order of precedence): poJson from the chat; else the table on POs Validated (the
+// user's edits from an earlier run) merged with a PO tab (e.g. "PO Validation"): the same Purchase Number + Model on
+// both counts once, POs Validated wins. To-do rows the script added and the user has not filled in yet are skipped.
+function loadPo(wb: ExcelScript.Workbook, sheets: string[], ownSheet: string, json: string | undefined): PoData {
   const out: PoData = { source: "", rows: [], problems: [] };
   let raw: Raw[][] = [];
+  const sources: string[] = [];
   if (json) {
     const parsed: Record<string, string | number>[] = JSON.parse(json);
     const pick = (o: Record<string, string | number>, names: string[]): Raw => {
@@ -1217,16 +1222,35 @@ function loadPo(wb: ExcelScript.Workbook, sheets: string[], json: string | undef
     };
     raw = parsed.map(o => Object.keys(PO_COLS).map(f => pick(o, PO_COLS[f])));
     out.source = "the PO data supplied in the chat (poJson)";
-  } else if (sheets.length && wb.getWorksheet(sheets[0])) {
-    const ws = wb.getWorksheet(sheets[0]) as ExcelScript.Worksheet;
-    const values = readValues(ws), h = bestHeader(values, PO_COLS);
-    out.source = `tab '${sheets[0]}'`;
-    // Rows up to the first empty row (the POs Validated sheet has the reconciliation section below)
-    for (let i = h.row + 1; i < values.length && values[i].some(v => String(v).trim()); i++) {
-      raw.push(Object.keys(PO_COLS).map(f => h.pos[f] === undefined ? "" : values[i][h.pos[f]]));
+  } else {
+    const keyOf = (r: Raw[]) => `${String(r[1]).trim()}|${String(r[2]).trim()}`.toLowerCase();
+    const seen = new Set<string>();
+    const t = wb.getTable("tblPOValidated");
+    if (ownSheet && t && t.getRowCount() > 0) {
+      const head = (t.getHeaderRowRange().getValues()[0] as Raw[]).map(v => headerKey(v));
+      const pos = mapColumns(head, PO_COLS).pos;
+      (t.getRangeBetweenHeaderAndTotal().getValues() as Raw[][]).forEach(r => {
+        const row = Object.keys(PO_COLS).map(f => pos[f] === undefined ? "" : r[pos[f]]);
+        if (!row.some(v => String(v).trim()) || String(row[0]).trim() === "None found") { return; }
+        raw.push(row); seen.add(keyOf(row));
+      });
+      if (raw.length) { sources.push(`your rows on '${PO_SHEET}'`); }
     }
+    if (sheets.length && wb.getWorksheet(sheets[0])) {
+      const ws = wb.getWorksheet(sheets[0]) as ExcelScript.Worksheet;
+      const values = readValues(ws), h = bestHeader(values, PO_COLS);
+      let n = 0;
+      for (let i = h.row + 1; i < values.length && values[i].some(v => String(v).trim()); i++) {
+        const row = Object.keys(PO_COLS).map(f => h.pos[f] === undefined ? "" : values[i][h.pos[f]]);
+        if (!seen.has(keyOf(row))) { raw.push(row); n++; }
+      }
+      if (n) { sources.push(`tab '${sheets[0]}'`); }
+    }
+    out.source = sources.join(" + ");
   }
   const text = (v: Raw) => String(v === undefined || v === null ? "" : v).trim();
+  // A to-do row the script added (Purchase Number and Model only) is not PO data yet
+  raw = raw.filter(r => [r[0], r[3], r[4], r[5], r[6]].some(v => text(v)));
   raw.forEach((r, i) => {
     const [date, number, model, quantity, raisedBy, physical, spider] = r;
     const row: PoRow = { date: typeof date === "number" ? date : text(date), number: text(number), model: text(model),
@@ -1654,10 +1678,21 @@ function spiderComment(a: Asset): string {
   const sc = a.statusComment.trim(), c = a.comment.trim();
   return (sc ? ` - Spider Comment: ${short(sc, 200)}` : "") + (c && c !== sc ? ` - ${sc ? "Comment" : "Spider Comment"}: ${short(c, 200)}` : "");
 }
+// Each PO line is followed by the models under that PO on Spider ("o Notebook - Dell Pro 14 Plus_VE: 656"), or, when
+// nothing is on Spider yet, the models on the user's PO rows
 function poLines(ctx: Ctx): string[] {
   const rc = ctx.recon, out: string[] = [];
+  const L1 = "• ", L2 = "      o ";
+  const models = (po: string, rows: PoRow[]) => {
+    const on = countBy(rc.newAssets.filter(a => a.po.trim() === po).map(a => `${a.assetClass} - ${a.model || "(no model on Spider)"}`));
+    keysByCount(on).forEach(k => out.push(`${L2}${k}: ${fmtNum(on.get(k) || 0)}`));
+    const typesOnPo = new Set<string>(rc.newAssets.filter(a => a.po.trim() === po).map(a => a.assetClass));
+    rows.filter(r => { const t = typeKey(r.model); return !t || !typesOnPo.has(t); })
+      .forEach(r => out.push(`${L2}${r.model || "(no model)"}: ${typeof r.quantity === "number" ? fmtNum(r.quantity) : "-"} on the PO, none on Spider yet`));
+  };
+  const allTypes = Array.from(new Set<string>(rc.newAssets.map(a => a.assetClass)));
   const typeKey = (model: string) => {
-    const k = compactKey(model), all = rc.newAssets.map(a => a.assetClass);
+    const k = compactKey(model), all = allTypes;
     const hit = all.find(t => [k, k.replace(/s$/, ""), k.replace(/es$/, ""), k === "mice" ? "mouse" : ""].indexOf(compactKey(t)) >= 0);
     return hit || "";
   };
@@ -1685,12 +1720,16 @@ function poLines(ctx: Ctx): string[] {
     const open = rows.filter(r => !ok(r.physical) || !ok(r.spider));
     if (open.length) { t += ` Validation: Physical Security ${Array.from(new Set<string>(open.map(r => r.physical || "blank"))).join(" / ")}, ` +
       `Spider ${Array.from(new Set<string>(open.map(r => r.spider || "blank"))).join(" / ")}.`; }
-    out.push(t);
+    out.push(L1 + t);
+    models(po, rows);
   });
   const unsupplied = countBy(rc.newAssets.filter(a => a.po.trim() && !supplied.has(a.po.trim())).map(a => a.po.trim()));
-  keysByCount(unsupplied).forEach(po => out.push(`PO: ${po} - ${fmtNum(unsupplied.get(po) || 0)} assets added on Spider (` +
-    countText(countBy(rc.newAssets.filter(a => a.po.trim() === po).map(a => a.assetClass)), 3) + "); no PO validation supplied."));
-  if (!out.length) { out.push("No POs to validate this month."); }
+  keysByCount(unsupplied).forEach(po => {
+    out.push(`${L1}PO: ${po} - ${fmtNum(unsupplied.get(po) || 0)} assets added on Spider (` +
+      countText(countBy(rc.newAssets.filter(a => a.po.trim() === po).map(a => a.assetClass)), 3) + "); no PO validation supplied.");
+    models(po, []);
+  });
+  if (!out.length) { out.push(`${L1}No POs to validate this month.`); }
   return out;
 }
 function monthlyReport(ctx: Ctx): MonthlyReport {
@@ -1747,7 +1786,7 @@ function monthlyReport(ctx: Ctx): MonthlyReport {
   });
   line("");
   head("2.1. P.Os Validation");
-  poLines(ctx).forEach(t => line(`${L1}${t}`));
+  poLines(ctx).forEach(t => line(t));
   line("");
   head("3. Serial number validation:");
   if (!rc.serialChecked) {
@@ -3130,6 +3169,78 @@ function newAssetRow(a: Asset): Cell[] {
   return [a.assetId, a.serial, a.status, a.assetClass, a.model, dateSerial(a.purchase), a.po, dateSerial(a.lastSeen), a.scanAge,
     a.functionUnit, dateSerial(a.created), a.createdAge, dateSerial(a.updated)];
 }
+// POs Validated: 1 your PO validation (the input: dropdowns, yellow = still to fill, a to-do row for every new-asset PO
+// with no validation yet), 2 the result per PO (green = matched), 3 what still needs attention.
+// The script never fills Quantity, Raised By, Purchase Date or a validation: those come from the user only.
+function buildPoSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
+  progress("Writing POs Validated");
+  const rc = ctx.recon, curName = monthName(rc.curPeriod);
+  const poRows = poReconRows(ctx);
+  const done = poRows.filter(x => x[7] === PO_RESULTS.matched).length;
+  const ws = newSheet(wb, PO_SHEET, `POs Validated - ${curName}`, `${poRows.length} POs: ${done} matched, ` +
+    `${poRows.length - done} need attention` + (ctx.po.source ? ` (your data: ${ctx.po.source})` : ""));
+  backLink(ws);
+  let r = sectionTitle(ws, 4, "How to use this tab");
+  r = textRows(ws, r, [
+    ["1.  Table 1: fill the yellow cells - Purchase Date, Quantity, Raised By, and pick Yes / No / Pending / Not Applicable from the list."],
+    ["2.  A PO is missing? Type it in the first empty row under table 1 - the table grows by itself."],
+    ["3.  Run the script again. Table 2 shows the result per PO (green = matched); table 3 lists what still needs you."]]);
+
+  // --- 1 Your PO validation: the user's rows, then a to-do row per new-asset PO and type with no row yet
+  const supplied = new Set<string>(ctx.po.rows.map(p => p.number.trim()));
+  const todo: Cell[][] = [];
+  Array.from(groupBy(rc.newAssets.filter(a => a.po.trim() && !supplied.has(a.po.trim())), a => a.po.trim() + "\u0001" + a.assetClass).keys())
+    .sort().forEach(k => { const [po, cls] = k.split("\u0001"); todo.push(["", po, cls, "", "", "", ""]); });
+  r = sectionTitle(ws, r, "1. Your PO validation", todo.length ? `${todo.length} row(s) added for POs on Spider with no validation yet - ` +
+    "complete the yellow cells" : "Your data, kept exactly as you entered it");
+  const inputTop = r + 1;
+  const userRows: Cell[][] = ctx.po.rows.map(p => [p.date, p.number, p.model, p.quantity, p.raisedBy, p.physical, p.spider]);
+  const all = userRows.concat(todo);
+  r = addTable(ws, r, "tblPOValidated", PO_HEADERS, all, { widths: [110, 150, 150, 90, 130, 170, 130], text: [1], date: [0], count: [3], blankRow: true });
+  const n = Math.max(1, all.length);
+  // Dropdowns and checks on the input columns; yellow while a cell is empty. Each is applied on its own so a refusal
+  // from Excel only loses that convenience, not the run.
+  const tryStep = (what: string, step: () => void) => {
+    try { step(); ws.getRangeByIndexes(inputTop, 0, 1, 1).getValues(); } catch (e) { progress(`POs Validated: ${what} not set (${String(e).slice(0, 80)})`); }
+  };
+  [5, 6].forEach(c => tryStep("dropdown", () => {
+    const dv = ws.getRangeByIndexes(inputTop, c, n, 1).getDataValidation();
+    dv.clear();
+    dv.setRule({ list: { inCellDropDown: true, source: PO_LABELS.join(",") } });
+  }));
+  tryStep("quantity check", () => {
+    const dv = ws.getRangeByIndexes(inputTop, 3, n, 1).getDataValidation();
+    dv.clear();
+    dv.setRule({ wholeNumber: { formula1: 0, operator: ExcelScript.DataValidationOperator.greaterThanOrEqualTo } });
+  });
+  [0, 3, 4, 5, 6].forEach(c => tryStep("yellow for empty cells", () => {
+    const cf = ws.getRangeByIndexes(inputTop, c, n, 1).addConditionalFormat(ExcelScript.ConditionalFormatType.presetCriteria).getPreset();
+    if (cf) {
+      cf.setRule({ criterion: ExcelScript.ConditionalFormatPresetCriterion.blanks });
+      cf.getFormat().getFill().setColor("#FFF2CC");
+    }
+  }));
+
+  // --- 2 Result per PO
+  r = sectionTitle(ws, r, "2. Result per PO", "Quantity Variance = your Quantity - assets on Spider with that PO (new this month)");
+  const resTop = r + 1;
+  r = addTable(ws, r, "tblPOReconciliation", PO_RECON_HEADER, poRows, { widths: [], text: [0], count: [2, 3], diff: [4] });
+  poRows.forEach((x, i) => ws.getRangeByIndexes(resTop + i, 7, 1, 1).getFormat().getFill().setColor(
+    x[7] === PO_RESULTS.matched ? "#E2EFDA" : x[7] === PO_RESULTS.notFound || x[7] === PO_RESULTS.variance ? "#FCE4E4" : "#FFF2CC"));
+
+  // --- 3 What still needs you
+  const flags: string[][] = [];
+  poRows.filter(x => x[7] === PO_RESULTS.missing).forEach(x => flags.push([String(x[0]), "Validation missing - complete its row in table 1"]));
+  poRows.filter(x => x[7] === PO_RESULTS.pending).forEach(x => flags.push([String(x[0]), `Validation pending or No (Physical Security ${x[5] || "-"}, Spider ${x[6] || "-"})`]));
+  poRows.filter(x => x[7] === PO_RESULTS.variance).forEach(x => flags.push([String(x[0]), `Quantity differs by ${signed(x[4] as number)} - check the PO quantity or the assets on Spider`]));
+  poRows.filter(x => x[7] === PO_RESULTS.notFound).forEach(x => flags.push([String(x[0]), "No new asset on Spider with this PO yet"]));
+  poRows.filter(x => x[7] === PO_RESULTS.blank).forEach(x => flags.push(["(empty)", `${x[2]} new assets have no PurchaseNo on Spider`]));
+  ctx.po.rows.filter(p => p.problems.length).forEach(p => flags.push([p.number || "(no PO number)", p.problems.join("; ")]));
+  r = sectionTitle(ws, r, "3. What still needs you", flags.length ? `${flags.length} item(s)` : "Nothing - all POs are complete");
+  addTable(ws, r, "tblPOFlags", ["PO", "What to do"], flags, { widths: [], wrap: [1] });
+  ws.getRangeByIndexes(0, 1, 1, 1).getFormat().setColumnWidth(170);
+  ws.getRangeByIndexes(0, 7, 1, 1).getFormat().setColumnWidth(190);
+}
 // Optional fields stay blank when the export has no such column - never zero, N/A or invented
 function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
   const rc = ctx.recon, notes: string[] = [];
@@ -3189,34 +3300,14 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
     dateSerial(c.cur.created), dateSerial(c.cur.updated)]), { widths: [110, 110, 110, 120, 200, 110, 150, 95, 110, 120, 100, 120, 120],
     text: [0, 1, 8, 10], date: [7], datetime: [9, 11, 12], freeze: true });
 
-  // --- POs Validated / tblPOValidated + reconciliation section
-  progress("Writing POs Validated");
-  ws = newSheet(wb, PO_SHEET, `POs Validated - ${curName}`, ctx.po.source ? `Supplied by the user (${ctx.po.source}); values kept exactly as ` +
-    "supplied. Edit the table and run the script again to re-check." : "No PO validation supplied yet. Type the user's rows into this table " +
-    "(or give them to the agent) and run again. Nothing here is ever filled in automatically.");
-  backLink(ws);
-  let r = sectionTitle(ws, 4, "1. PO validation rows (supplied by you)", "Your data, kept exactly as supplied; edit it here and run the script again");
-  r = addTable(ws, r, "tblPOValidated", PO_HEADERS, ctx.po.rows.map(p => [p.date, p.number, p.model, p.quantity, p.raisedBy, p.physical, p.spider]),
-    { widths: [110, 150, 150, 90, 130, 150, 130], text: [1], date: [0], count: [3], blankRow: true });
-  r = sectionTitle(ws, r, "2. PO reconciliation", "Quantity Variance = User-Provided Quantity - Export Asset Count (new assets this month)");
-  const poRows = poReconRows(ctx);
-  r = addTable(ws, r, "tblPOReconciliation", PO_RECON_HEADER, poRows, { widths: [150, 150, 90, 100, 90, 150, 130, 190], text: [0],
-    count: [2, 3], diff: [4] });
-  const flags: string[][] = [];
-  poRows.filter(x => x[7] === PO_RESULTS.notFound).forEach(x => flags.push(["PO not found among new assets", String(x[0])]));
-  poRows.filter(x => x[7] === PO_RESULTS.missing).forEach(x => flags.push(["PO without complete validation", String(x[0])]));
-  poRows.filter(x => x[7] === PO_RESULTS.variance).forEach(x => flags.push(["Quantity difference", `${x[0]}: ${signed(x[4] as number)}`]));
-  openValidations(ctx).filter(x => x.indexOf("no validation supplied") < 0).forEach(x => flags.push(["Approval pending or missing", x]));
-  poRows.filter(x => x[7] === PO_RESULTS.blank).forEach(x => flags.push(["New assets with empty PurchaseNo", String(x[2])]));
-  ctx.po.problems.forEach(p => flags.push(["PO row to complete or correct", p]));
-  r = sectionTitle(ws, r, "3. Flags for manual review", flags.length ? `${flags.length} to review` : "Nothing to review");
-  addTable(ws, r, "tblPOFlags", ["Flag", "Details"], flags, { widths: [220], wrap: [1] });
+  // --- POs Validated: the one place to enter PO validation (see buildPoSheet)
+  buildPoSheet(wb, ctx);
 
   // --- Quality Checks (full audit only; the results are also in the flow result)
   if (REPORT_ONLY) { return notes; }
   progress("Writing Quality Checks");
   ws = newSheet(wb, "Quality Checks", `Quality Checks - ${curName}`, "Every control must pass (or be reviewed) before the monthly report is final");
-  r = addTable(ws, 3, "tblQualityChecks", ["Check", "Expected", "Actual", "Result"], qualityChecks(ctx), { widths: [480, 110, 110, 80] });
+  let r = addTable(ws, 3, "tblQualityChecks", ["Check", "Expected", "Actual", "Result"], qualityChecks(ctx), { widths: [480, 110, 110, 80] });
   r = sectionTitle(ws, r, "Completion report");
   r = textRows(ws, r, reconText(ctx).map(t => [t]));
   if (rc.prevDup.length || rc.curDup.length) {

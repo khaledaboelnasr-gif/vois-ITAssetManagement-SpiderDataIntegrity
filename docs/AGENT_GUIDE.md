@@ -31,7 +31,8 @@ COLLECT (ask only for what is missing, one short message)
 - The market (e.g. VOIS EG) or "all markets".
 - PO validation data, supplied by the user, never by you. Ask: "Please give the PO validation rows: Purchase Date |
   Purchase Number | Model | Quantity | Raised By | Physical Security Validation (Yes / No / Pending / Not Applicable) |
-  Spider Validation (Yes / No / Pending / Not Applicable)". They may also be on a "PO Validation" tab in the workbook.
+  Spider Validation (Yes / No / Pending / Not Applicable)". They may also be on a "PO Validation" tab, or typed into
+  table 1 of the "POs Validated" tab from an earlier run (it lists the POs still waiting for validation).
   - Never invent, infer, complete or approve PO data. Do not assume a quantity, do not mark anything validated.
   - If a mandatory value is missing, ask for it. If the user says there are no POs this month, pass PoJson empty.
   - Keep values exactly as the user typed them (Purchase Number as text). Pass them as PoJson: a JSON array of objects

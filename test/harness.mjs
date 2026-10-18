@@ -107,7 +107,7 @@ const wb = { sheets: Object.keys(data).filter(n => !drop(n)).map(n => wrap(new S
     if (!this.tableNames.has(String(n).toLowerCase())) return undefined;
     const ws = this.sheets.find(s => s.tableRanges.some(t => t.name.toLowerCase() === String(n).toLowerCase()));
     const t = ws.tableRanges.find(x => x.name.toLowerCase() === String(n).toLowerCase());
-    return wrap({ getName: () => n, getHeaderRowRange: () => ws.getRangeByIndexes(t.r, t.c, 1, t.w),
+    return wrap({ getName: () => n, getRowCount: () => t.h - 1, getHeaderRowRange: () => ws.getRangeByIndexes(t.r, t.c, 1, t.w),
       getRangeBetweenHeaderAndTotal: () => ws.getRangeByIndexes(t.r + 1, t.c, t.h - 1, t.w) });
   },
   addWorksheet(n) { if (this.getWorksheet(n)) throw new Error("dup sheet " + n); const s = wrap(new Sheet(n)); this.sheets.push(s); return s; } };
@@ -151,10 +151,28 @@ if (process.env.MARK) {
     pc.cells.set(`${r},10`, r % 10 === 0 ? "N" : "Y"); pc.cells.set(`${r},11`, r % 7 === 0 ? "N" : "Y"); pc.cells.set(`${r},12`, "Y");
   }
 }
+// POFILL=1: complete the to-do rows on POs Validated as a user would, then the re-run must read them as PO data
+let poFilled = 0;
+if (process.env.POFILL) {
+  const ps = wb.getWorksheet("POs Validated"), t = ps.tableRanges.find(x => x.name === "tblPOValidated");
+  for (let i = 1; i < t.h; i++) {
+    const at = c => `${t.r + i},${t.c + c}`;
+    if (ps.cells.get(at(1)) && !ps.cells.get(at(3))) {
+      ps.cells.set(at(0), 46300); ps.cells.set(at(3), 5); ps.cells.set(at(4), "USER-0009"); ps.cells.set(at(5), "Yes"); ps.cells.set(at(6), "Yes"); poFilled++;
+    }
+    // an edit on POs Validated (Pending -> Yes) must win over the PO tab it came from
+    [5, 6].forEach(c => { if (ps.cells.get(at(c)) === "Pending") ps.cells.set(at(c), "Yes"); });
+  }
+  console.log("POFILL: completed", poFilled, "to-do row(s)");
+}
 if (process.env.SHARE !== "1" && !process.env.NORERUN) { // re-running on the same workbook must work (our sheets are skipped)
   const res2 = run();
   console.log("RERUN ok | assets", res2.assets, "| score", res2.integrityScore);
   assert.equal(res2.assets, res.assets, "re-run reads the same assets");
+  const poCount = x => +((x.reconciliation.find(l => l.startsWith("PO validation records processed")) || "").match(/: (\d+)/) || [0, 0])[1];
+  console.log("PO rows: first run", poCount(res), "| re-run", poCount(res2));
+  if (!process.env.POJSON) assert.equal(poCount(res2), poCount(res) + poFilled, "re-run reads the user's PO rows (and the completed to-do rows) once");
+  if (process.env.POFILL) assert.ok(!res2.reconciliation.some(l => /Pending/.test(l)), "edits on POs Validated win over the PO tab");
   if (process.env.MARK) console.log("physical:", res2.runInfo.length, (res2.agentInput.match(/## 11\. Physical check\n(.*)/) || [])[1]);
 }
 const dump = (name, maxR, maxLen = 70) => { const w = wb.getWorksheet(name); console.log("=== " + name); if (!w) return;

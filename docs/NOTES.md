@@ -61,6 +61,14 @@ The spec is the "Monthly Asset Reconciliation Copilot Agent" instructions, writt
 
 ## Key decisions
 
+- **PO validation is managed on the POs Validated tab (2026-10-18).** Table 1 (tblPOValidated) is the input: dropdowns
+  for the two validations, a whole-number check on Quantity, yellow while a cell is empty, and a to-do row (Purchase
+  Number + asset type from Spider only) for every new-asset PO with no validation yet. The script never fills Quantity,
+  Raised By, Purchase Date or a validation. Next run, the table is read back and merged with any PO tab (same Purchase
+  Number + Model counts once; POs Validated wins); unfilled to-do rows are not PO data. poJson from the chat overrides
+  both. Table 2 = result per PO (green matched, amber missing / pending, red variance / not found); table 3 = what to do.
+- **Email 2.1** lists, under each PO, its models on Spider (type - model: count) and the PO lines not on Spider yet.
+
 - **Stock utilisation = Notebooks and Headsets only (user decision, 2026-10-18).** Headsets = type "Headset" plus
   headset models filed under "Zubehör-Client" (model matches Headset / Jabra / Plantronics / Blackwire / Evolve / EPOS /
   Sennheiser / Voyager / Poly). In use = stage In Use; in stock = In stock, Reserved, Ready for use, To install, Building.

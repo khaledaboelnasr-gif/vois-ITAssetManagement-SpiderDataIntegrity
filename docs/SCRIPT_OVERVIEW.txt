@@ -1,5 +1,5 @@
 VOIS ASSET AUDIT SCRIPT - OVERVIEW
-Script version 2026.10.18.3
+Script version 2026.10.18.5
 ====================================================================
 
 Use this to review the script and ask for changes. To ask for a change,
@@ -50,6 +50,9 @@ PIVOT & SUMMARY, top to bottom and left to right, each table under a numbered he
   3 Status changes - every transition, and whether it is on Scrap & Inactive Assets
   4-7 New assets - by type, by PurchaseNo, filled or empty PurchaseNo, by model
   8-10 PivotTables - new assets by type; Scrapped / Lost by type and model; PO quantities
+POS VALIDATED: "How to use this tab" (3 steps), 1 Your PO validation - the one place to type PO data: dropdowns,
+yellow = still to fill, a to-do row for each PO on Spider with no validation yet; 2 Result per PO (green = matched);
+3 What still needs you. Your rows are kept between runs.
 STOCK & UTILISATION: 1 Summary (Notebooks; Headsets, split into type Headset and headset models under
 Zubehör-Client), 2 Notebooks by model, 3 Headsets by model. The other tabs below are made only when
 REPORT_ONLY is set to false in the script.
