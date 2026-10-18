@@ -231,7 +231,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.18.8";
+const SCRIPT_VERSION = "2026.10.18.9";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -571,6 +571,7 @@ interface Mappings {
   status: Map<string, string>; types: Map<string, [string, string]>; market: [string, string][]; limits: Map<string, number>;
   lifecycle: Map<string, number>; hostname: Map<string, RegExp>; columns: Map<string, string>; off: Set<string>;
   source: string; applied: number; problems: string[]; reasons: [string, string][];
+  stockStatus: Map<string, string>; stockExclude: string[]; headset: [string, string][];
 }
 interface TabInfo { name: string; headerAbs: number; lastAbs: number; colAbs: Record<string, number>; rows: number; }
 interface AssetLoad {
@@ -1279,7 +1280,7 @@ function loadPo(wb: ExcelScript.Workbook, sheets: string[], ownSheet: string, js
 function emptyMappings(): Mappings {
   return { status: new Map<string, string>(), types: new Map<string, [string, string]>(), market: [], limits: new Map<string, number>(),
     lifecycle: new Map<string, number>(), hostname: new Map<string, RegExp>(), columns: new Map<string, string>(), off: new Set<string>(),
-    source: "None", applied: 0, problems: [], reasons: [] };
+    source: "None", applied: 0, problems: [], reasons: [], stockStatus: new Map<string, string>(), stockExclude: [], headset: [] };
 }
 // Mappings rows {Kind, Value, MapsTo} from the central table (mappingsJson) or a 'Mappings' sheet in this workbook
 function loadMappings(wb: ExcelScript.Workbook, json: string | undefined): Mappings {
@@ -1336,6 +1337,14 @@ function loadMappings(wb: ExcelScript.Workbook, json: string | undefined): Mappi
     } else if (kind === "hostnamepattern" || kind === "hostname pattern") {
       try { maps.hostname.set(value.toLowerCase() || "*", new RegExp(to, "i")); maps.applied++; }
       catch (e) { maps.problems.push(`${line}: not a valid pattern`); }
+    } else if (kind === "stockstatus" || kind === "stock status") {
+      const b = /^in ?use$/i.test(to) ? STOCK_USE : /^in ?stock$/i.test(to) ? STOCK_STOCK : /^(exclude|out|no|leave out)$/i.test(to) ? STOCK_OUT : "";
+      if (value && b) { maps.stockStatus.set(vk, b); maps.applied++; } else { maps.problems.push(`${line}: MapsTo must be In use, In stock or Exclude`); }
+    } else if (kind === "stockexclude" || kind === "stock exclude") {
+      if (value) { maps.stockExclude.push(value.toLowerCase()); maps.applied++; } else { maps.problems.push(`${line}: needs the Function Unit text`); }
+    } else if (kind === "headset") {
+      const c = /^wireless$/i.test(to) ? "Wireless" : /^wired$/i.test(to) ? "Wired" : "";
+      if (value && c) { maps.headset.push([value.toLowerCase(), c]); maps.applied++; } else { maps.problems.push(`${line}: MapsTo must be Wired or Wireless`); }
     } else if (kind === "reason") {
       if (value && to) { maps.reasons.push([value.toLowerCase(), to]); maps.applied++; } else { maps.problems.push(`${line}: needs a keyword and a reason`); }
     } else if (kind === "check") {
@@ -1651,8 +1660,6 @@ function signed(n: number): string {
 interface MonthlyReport { subject: string; attachment: string; email: string[]; heads: number[]; ppt: string[]; }
 // Status-change and serial groups up to this size are listed asset by asset (larger ones as a count)
 const EMAIL_DETAIL_MAX = 10;
-// Scrapped asset types listed asset by asset in the email (user decision, 2026-10-18)
-const EMAIL_SCRAPPED_DETAIL_TYPES = ["Monitor", "Notebook", "Zubehör-Client"].map(t => compactKey(t));
 // Where the team adds what the investigation found for each listed asset
 const EMAIL_NOTE = "[add validation note]";
 const COPILOT_PROMPT_LIMIT = 2000;
@@ -1678,7 +1685,7 @@ function typeRows(rc: Recon, group: string, maps: Mappings): [string, number, nu
 // Stock utilization for the email: Notebooks and Headsets (Headset type + headset models under Zubehör-Client)
 function stockLines(ctx: Ctx): string[] {
   const p = (x: StockRow) => utilOf(x) === "" ? "-" : (100 * (utilOf(x) as number)).toFixed(1) + "%";
-  return stockSummary(ctx).map((x, i) => (i < 2 ? "• " : "      o ") + `${x.label.trim()}: ${fmtNum(x.use)} in use, ${fmtNum(x.stock)} in stock - ${p(x)} utilized` +
+  return stockSummary(ctx).filter((x, i) => i < 2 || x.use + x.stock).map((x, i) => (i < 2 ? "• " : "      o ") + `${x.label.trim()}: ${fmtNum(x.use)} in use, ${fmtNum(x.stock)} in stock - ${p(x)} utilized` +
     (ctx.recon.available ? `; ${fmtNum(x.deployed)} deployed this month` + (x.deployed ? `, stock covers about ${(x.stock / x.deployed).toFixed(1)} months` : "") : ""));
 }
 // The Spider comments of an asset for the email: the status comment first, then the general comment if it differs
@@ -1749,10 +1756,7 @@ function monthlyReport(ctx: Ctx): MonthlyReport {
   const email: string[] = [], heads: number[] = [];
   const head = (t: string) => { heads.push(email.length); email.push(t); };
   const line = (t: string) => email.push(t);
-  const scrapped = rc.operational.filter(c => compactKey(c.cur.status) === "scrapped");
-  const lost = rc.operational.filter(c => compactKey(c.cur.status) === "lost");
   const blankPo = rc.newAssets.filter(a => !a.po).length;
-  const byPo = countBy(rc.newAssets.filter(a => a.po).map(a => a.po));
   const po = poReconRows(ctx), open = openValidations(ctx);
   const groups = VALUE_GROUPS.map(g => {
     const rows = typeRows(rc, g, ctx.maps);
@@ -1771,7 +1775,7 @@ function monthlyReport(ctx: Ctx): MonthlyReport {
   const day = (d: Date | null) => d ? `${d.getUTCDate()} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getUTCMonth()]} ${d.getUTCFullYear()}` : "";
   const plural = (t: string) => /s$|-/i.test(t) ? t : t + "s";
   const typeCounts = (list: Asset[]) => keysByCount(countBy(list.map(a => a.assetClass)));
-  const L1 = "• ", L2 = "      o ", L3 = "            ▪ ", L4 = "                  • ";
+  const L1 = "• ", L2 = "      o ", L3 = "            ▪ ";
 
   line("Hi All,");
   line("");
@@ -1831,61 +1835,72 @@ function monthlyReport(ctx: Ctx): MonthlyReport {
   head("4. Status changes validation:");
   groupsByStatus.forEach(g => line(`${L1}${g[0]}: ${fmtNum(g[1].length)}`));
   line("");
-  head("4.1. Status-change details by Asset Type and Model:");
+  head("4.1. Status-change details by Asset Type:");
   const shown = groupsByStatus.filter(g => g[1].length);
   if (!shown.length) { line(`${L1}No status changes to Scrapped, Inactive, Lost or Stolen`); }
+  const vOf = (c: StatusChange) => (rc.validation.get(idKey(c.cur.assetId)) || ["", ""])[0];
   shown.forEach(g => {
-    line(`${L1}${g[0]}`);
+    const reasons = countBy(g[1].map(c => changeReason(c.cur, ctx.maps)));
+    line(`${L1}${g[0]}: ${fmtNum(g[1].length)} (main reasons: ${countText(reasons, 3)})`);
+    // Lost and Stolen are few and serious: each asset; Scrapped and Inactive: counts per type, with the validation progress
+    if ((g[0] === "Lost" || g[0] === "Stolen") && g[1].length <= EMAIL_DETAIL_MAX) {
+      g[1].forEach(c => line(`${L2}${c.cur.assetClass} - ${c.cur.model || "(no model)"} - Asset no: ${c.cur.assetId}` +
+        (c.cur.serial ? ` - Serial number: ${c.cur.serial}` : "") + " - " + validationText(rc.validation.get(idKey(c.cur.assetId)))));
+      return;
+    }
     typeCounts(g[1].map(c => c.cur)).forEach(t => {
-      const ofType = g[1].filter(c => c.cur.assetClass === t);
-      // Scrapped: only Monitors, Notebooks and Zubehör-Client are listed asset by asset (the rest as a count);
-      // Inactive, Lost and Stolen: every asset is listed. Each listed asset ends with a note for the team to complete.
-      const detail = g[0] !== "Scrapped" || EMAIL_SCRAPPED_DETAIL_TYPES.indexOf(compactKey(t)) >= 0;
-      if (!detail) { line(`${L2}${plural(t)}: ${fmtNum(ofType.length)}`); return; }
-      line(`${L2}${t}`);
-      keysByCount(countBy(ofType.map(c => c.cur.model || "(no model)"))).forEach(m => {
-        const ofModel = ofType.filter(c => (c.cur.model || "(no model)") === m);
-        line(`${L3}${m}: ${ofModel.length}`);
-        ofModel.forEach(c => line(`${L4}Asset no: ${c.cur.assetId}` + (c.cur.serial ? ` - Serial number: ${c.cur.serial}` : "") +
-          spiderComment(c.cur) + " - " + validationText(rc.validation.get(idKey(c.cur.assetId)))));
-      });
+      const ofType = g[1].filter(c => c.cur.assetClass === t), check = ofType.filter(c => needsValidation(c.cur));
+      const progress = check.length ? " - " + VALIDATION_RESULTS.map(v => [v, check.filter(c => vOf(c) === v).length] as [string, number])
+        .concat([["pending", check.filter(c => !vOf(c)).length]]).filter(x => x[1]).map(x => `${x[0].toLowerCase()} ${fmtNum(x[1])}`).join(", ") : "";
+      line(`${L2}${plural(t)}: ${fmtNum(ofType.length)}${progress}`);
     });
   });
+  // Only the assets that need follow-up are listed by name; everything else is on the tab
+  const followUp = rc.operational.filter(c => vOf(c) && vOf(c) !== "Validated");
+  if (followUp.length) {
+    line("");
+    head("4.2. Assets needing follow-up:");
+    followUp.slice(0, 20).forEach(c => line(`${L1}Asset no: ${c.cur.assetId} (${c.cur.assetClass} - ${c.cur.model || "no model"}, ${c.cur.status}) - ` +
+      validationText(rc.validation.get(idKey(c.cur.assetId)))));
+    if (followUp.length > 20) { line(`${L1}and ${followUp.length - 20} more on the Scrap & Inactive Assets tab`); }
+  }
+  line(`${L1}Full list with comments, reasons and validation: Scrap & Inactive Assets tab.`);
   line("");
   head("5. Stock utilization:");
   stockLines(ctx).forEach(t => line(t));
   line("");
   line("Best regards,");
 
-  // The model column of an unsupplied PO lists models with counts, e.g. "Bag (50)": the counts are dropped here
-  const model = (r: Cell[]) => String(r[1]).replace(/ \(\d+\)/g, "");
-  // Copilot in PowerPoint: 3 slides at most, numbers given exactly, the open VOIS template's look
-  const ppt: string[] = [];
   const top = (m: Map<string, number>, n: number) => keysByCount(m).slice(0, n).map(k => `${k} ${fmtNum(m.get(k) || 0)}`).join(", ");
-  const moved = flatten(groups.map(x => x.rows.filter(r => r[1] !== r[2]).map(r => `${r[0]}\u0001${r[2] - r[1]}`)))
-    .map(t => t.split("\u0001")).sort((a, b) => Math.abs(+b[1]) - Math.abs(+a[1])).slice(0, 4).map(t => `${t[0]} ${signed(+t[1])}`).join(", ");
-  const serialShort = (c: string) => c === SERIAL_CHANGED ? "changed" : c === SERIAL_ADDED ? "added" : "removed";
-  ppt.push(`Create exactly 3 slides titled VCAMS Monthly Asset Reconciliation - ${curName}, using this VOIS template's layouts, ` +
-    "colours and fonts. No title slide, no agenda, no closing slide. Use only the numbers below, exactly as written; do not add, " +
-    "round or estimate numbers. Keep text short: at most 4 bullets per slide. Add the charts asked for as simple bar or column charts.");
-  ppt.push(`Slide 1, Overview ${prevName} vs ${curName}: 3 large figures: ${prevName} ${fmtNum(rc.prevRows)} assets, ` +
-    `${curName} ${fmtNum(rc.curRows)} assets, net movement ${signed(rc.curRows - rc.prevRows)}. Clustered column chart by value group, ` +
-    `${prevName} vs ${curName}: ` + groups.map(x => `${x.g} ${fmtNum(x.p)} vs ${fmtNum(x.c)}`).join("; ") +
-    `. One line: biggest changes ${moved || "none"}.`);
-  ppt.push(`Slide 2, Movements this month: bar chart with New ${fmtNum(rc.newAssets.length)}, Removed ${fmtNum(rc.removed.length)}, ` +
-    `Scrapped ${fmtNum(scrapped.length)}, Lost ${fmtNum(lost.length)}` +
-    (rc.serialChecked ? `, Serial number changes ${fmtNum(rc.serialChanges.length)}` : "") + ". Bullets: " +
-    (rc.newAssets.length ? `new by type ${top(countBy(rc.newAssets.map(a => a.assetClass)), 3)}; by PO ${byPo.size ? top(byPo, 2) : "none"}, ` +
-      `blank PurchaseNo ${fmtNum(blankPo)}` : "no new assets") +
-    (rc.operational.length ? `; scrapped, lost or inactive by type ${top(countBy(rc.operational.map(c => c.cur.assetClass)), 3)}` : "") +
-    (rc.serialChecked && rc.serialChanges.length ? `; serials ${top(countBy(rc.serialChanges.map(c => serialShort(c.change))), 3)}` : "") +
-    (rc.removed.length ? "; removed assets are to be reviewed, not treated as scrapped" : "") + "; stock utilization " +
-    stockSummary(ctx).slice(0, 2).map(x => `${x.label.replace(" (all)", "")} ${utilOf(x) === "" ? "-" : (100 * (utilOf(x) as number)).toFixed(1) + "%"}`).join(", ") + ".");
-  ppt.push("Slide 3, PO validation and points for review: a small table with columns PO, Model, In export, Supplied, Variance, Result: " +
-    (po.length ? po.slice(0, 4).map(r => `${r[0] === "(empty)" ? "Empty PurchaseNo" : r[0]}, ${model(r) || "-"}, ${fmtNum(r[2] as number)}, ` +
-      `${r[3] === "" ? "-" : fmtNum(r[3] as number)}, ${r[4] === "" ? "-" : signed(r[4] as number)}, ${r[7]}`).join("; ") +
-      (po.length > 4 ? `; and ${po.length - 4} more POs in the workbook` : "") : "no new-asset POs") +
-    `. Then up to 3 bullets for review: ${review.length ? review.slice(0, 3).join("; ") : "none"}.`);
+  // Copilot in PowerPoint: a 4-slide executive summary. Built the way Microsoft recommends: start from the organisation's
+  // template, say the goal, the audience and the exact content per slide; numbers as big figures and simple tables
+  // (more reliable than charts from text), each slide title stating the message.
+  const ppt: string[] = [];
+  const pctOf = (x: StockRow) => utilOf(x) === "" ? "-" : (100 * (utilOf(x) as number)).toFixed(1) + "%";
+  const st = stockSummary(ctx), net = rc.curRows - rc.prevRows;
+  const biggest = flatten(groups.map(x => x.rows.filter(r => r[1] !== r[2]).map(r => `${plural(r[0])}\u0001${r[2] - r[1]}`)))
+    .map(t => t.split("\u0001")).sort((x, y) => Math.abs(+y[1]) - Math.abs(+x[1]))[0];
+  const toCheck = rc.operational.filter(c => needsValidation(c.cur)), checked = toCheck.filter(c => vOf(c)).length;
+  const reasonTop = countText(countBy(rc.operational.map(c => changeReason(c.cur, ctx.maps))), 2);
+  const next: string[] = [];
+  if (toCheck.length > checked) { next.push(`validate ${fmtNum(toCheck.length - checked)} scrapped/inactive notebooks, monitors, accessories`); }
+  if (open.length) { next.push(`complete ${open.length} PO validations`); }
+  if (blankPo) { next.push(`add PurchaseNo to ${fmtNum(blankPo)} new assets`); }
+  if (rc.removed.length) { next.push(`review ${fmtNum(rc.removed.length)} removed assets`); }
+  ppt.push(`Create a 4-slide executive summary in this VOIS template, using its layouts, colours and fonts. Audience: IT asset ` +
+    "leadership. No agenda or closing slide. Each slide title states the key message in under 10 words. Max 4 bullets per slide, " +
+    "max 12 words each. Show numbers as large figures or simple tables. Use only these numbers, exactly as written.");
+  ppt.push(`Slide 1 - VCAMS asset reconciliation, ${curName}. Large figures: ${fmtNum(rc.curRows)} assets (${signed(net)} vs ${prevName}), ` +
+    `${fmtNum(rc.newAssets.length)} new, ${fmtNum(rc.operational.length)} scrapped/inactive/lost.` +
+    (biggest ? ` Message: change driven by ${biggest[0]} ${signed(+biggest[1])}.` : ""));
+  ppt.push(`Slide 2 - Inventory movement. Table Group | ${prevName} | ${curName} | Change: ` +
+    groups.filter(x => x.g !== UNLISTED || x.p || x.c).map(x => `${x.g} | ${fmtNum(x.p)} | ${fmtNum(x.c)} | ${signed(x.c - x.p)}`).join("; ") +
+    `; Total | ${fmtNum(rc.prevRows)} | ${fmtNum(rc.curRows)} | ${signed(net)}. Bullet: new by type ${top(countBy(rc.newAssets.map(a => a.assetClass)), 3) || "none"}.`);
+  ppt.push(`Slide 3 - Scrapped, inactive and lost. Table Status | Assets: ` + groupsByStatus.map(g => `${g[0]} | ${fmtNum(g[1].length)}`).join("; ") +
+    `. Bullets: main reasons ${reasonTop || "none"}; validation ${fmtNum(checked)} of ${fmtNum(toCheck.length)} notebooks, monitors and accessories done.`);
+  ppt.push(`Slide 4 - POs, stock and next steps. Bullets: ${po.length - po.filter(x => x[7] !== PO_RESULTS.matched).length} of ${po.length} POs matched; ` +
+    `stock utilization notebooks ${pctOf(st[0])}, headsets ${pctOf(st[1])} (wired ${pctOf(st[2])}, wireless ${pctOf(st[3])}); ` +
+    `next steps: ${next.slice(0, 3).join("; ") || "none"}.`);
   const d = rc.curDay || ctx.asOf, n = d.getUTCDate();
   const th = n % 10 === 1 && n !== 11 ? "st" : n % 10 === 2 && n !== 12 ? "nd" : n % 10 === 3 && n !== 13 ? "rd" : "th";
   const attachment = `Spider Data Integrity - ${n}${th} of ${monthName(monthOf(d)).split(" ")[0]}`;
@@ -2502,52 +2517,94 @@ function stockGroup(a: Asset): string {
   if (t === compactKey("Zubehör-Client") && HEADSET_MODEL.test(a.model)) { return STOCK_HEADSETS; }
   return "";
 }
+// How an asset counts for stock utilization:
+//   In use   = status In operation
+//   In stock = In stock, Reserved, Ready for use, To install, Building
+//   left out = everything else (Scrapped, Marketed, Lost, Stolen, Inactive, Disabled, Authorised inactive, Ordered, ...)
+//              and every asset whose Function Unit is excluded
+// Mappings rows change this: "StockStatus | Reserved | Exclude" (or In use / In stock), "StockExclude | <Function Unit text>"
+const STOCK_USE = "In use", STOCK_STOCK = "In stock", STOCK_OUT = "Left out";
+function stockBucket(a: Asset, maps: Mappings): string {
+  const fu = a.functionUnit.toLowerCase();
+  if (fu && maps.stockExclude.some(x => fu.indexOf(x) >= 0)) { return STOCK_OUT; }
+  const own = maps.stockStatus.get(compactKey(a.status));
+  if (own) { return own; }
+  return a.stage === IN_USE ? STOCK_USE : a.stage === STOCK ? STOCK_STOCK : STOCK_OUT;
+}
+// Wired or wireless, from the headset model name (Mappings rows "Headset | <model text> | Wired / Wireless" come first)
+const HEADSET_WIRELESS = /wireless|bluetooth|\bbt\b|voyager|savi|evolve2? ?(65|75|85)\b|engage|\bdect\b|\badapt\b|\blink\b|\bwl\b/;
+const HEADSET_WIRED = /wired|\busb\b|blackwire|evolve2? ?(20|30|40|50|80)\b|\bsc ?\d+|jack|3\.5|corded|encore|\buc\b/;
+function headsetConnection(a: Asset, maps: Mappings): string {
+  const m = a.model.toLowerCase(), t = m.replace(/[^a-z0-9.]+/g, " ");
+  const own = maps.headset.find(h => m.indexOf(h[0]) >= 0);
+  if (own) { return own[1]; }
+  return HEADSET_WIRELESS.test(t) ? "Wireless" : HEADSET_WIRED.test(t) ? "Wired" : "Not sure (check model)";
+}
 interface StockRow { label: string; use: number; stock: number; deployed: number; }
-// [Notebooks, Headsets (all), Headsets - Headset type, Headsets - Zubehör-Client headset models]
+// [Notebooks, Headsets (all), Headsets - wired, Headsets - wireless, (Headsets - not sure, when any)]
 function stockSummary(ctx: Ctx): StockRow[] {
   const row = (label: string, keep: (a: Asset) => boolean): StockRow => {
-    const list = ctx.assets.filter(a => keep(a)), use = list.filter(a => a.stage === IN_USE);
-    return { label, use: use.length, stock: list.filter(a => a.stage === STOCK).length, deployed: deployRate(use, ctx) };
+    const list = ctx.assets.filter(a => keep(a)), use = list.filter(a => stockBucket(a, ctx.maps) === STOCK_USE);
+    return { label, use: use.length, stock: list.filter(a => stockBucket(a, ctx.maps) === STOCK_STOCK).length, deployed: deployRate(use, ctx) };
   };
-  return [
-    row(STOCK_NOTEBOOKS, a => stockGroup(a) === STOCK_NOTEBOOKS),
-    row(STOCK_HEADSETS + " (all)", a => stockGroup(a) === STOCK_HEADSETS),
-    row("   of which type Headset", a => stockGroup(a) === STOCK_HEADSETS && compactKey(a.assetClass) === "headset"),
-    row("   of which under Zubehör-Client", a => stockGroup(a) === STOCK_HEADSETS && compactKey(a.assetClass) !== "headset")
-  ];
+  const hs = (c: string) => (a: Asset) => stockGroup(a) === STOCK_HEADSETS && headsetConnection(a, ctx.maps) === c;
+  const out = [row(STOCK_NOTEBOOKS, a => stockGroup(a) === STOCK_NOTEBOOKS), row(STOCK_HEADSETS + " (all)", a => stockGroup(a) === STOCK_HEADSETS),
+    row("   Wired headsets", hs("Wired")), row("   Wireless headsets", hs("Wireless"))];
+  const unsure = row("   Headsets - not sure if wired (check model)", hs("Not sure (check model)"));
+  return unsure.use + unsure.stock ? out.concat([unsure]) : out;
 }
 function utilOf(r: StockRow): Cell {
   return r.use + r.stock ? r.use / (r.use + r.stock) : "";
 }
 function buildStockSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
   progress("Writing Stock & Utilisation");
-  const monthly = ctx.recon.available;
+  const monthly = ctx.recon.available, maps = ctx.maps;
   const ws = newSheet(wb, "Stock & Utilisation", "Stock Utilization - Notebooks and Headsets - " + monthName(ctx.period),
-    "Utilization = in use / (in use + in stock). In stock = In stock, Reserved, Ready for use, To install, Building. " +
-    "Headsets = type Headset + headset models under Zubehör-Client.");
+    "Utilization = in use / (in use + in stock). Table 2 shows exactly which statuses count. Headsets = type Headset + " +
+    "headset models under Zubehör-Client, split into wired and wireless by model name.");
   backLink(ws);
   const sum = stockSummary(ctx);
   let r = sectionTitle(ws, 4, "1. Summary", monthly ? "Deployed this month = moved to In operation since the previous export; " +
     "months of cover = in stock / deployed this month" : "Deployments need the previous export");
   const coverOf = (x: StockRow): Cell => x.deployed ? x.stock / x.deployed : "";
+  const sumTop = r + 1;
   r = addTable(ws, r, "tblStockSummary", ["Category", "In Use", "In Stock", "Utilization", "Deployed This Month", "Months of Cover"],
     sum.map(x => [x.label, x.use, x.stock, utilOf(x), monthly ? x.deployed : "", monthly ? coverOf(x) : ""]),
-    { widths: [260, 110, 90, 90, 110, 100, 100], count: [1, 2, 4], pct: [3], num: [5], bars: [3] });
-  ws.getRangeByIndexes(r - 3 - sum.length + 2, 0, 1, 6).getFormat().getFont().setBold(true);
-  ws.getRangeByIndexes(r - 3 - sum.length + 1, 0, 1, 6).getFormat().getFont().setBold(true);
-  // Per model, most stock first
+    { widths: [300, 110, 90, 90, 110, 100, 100, 100], count: [1, 2, 4], pct: [3], num: [5], bars: [3] });
+  ws.getRangeByIndexes(sumTop, 0, 2, 6).getFormat().getFont().setBold(true);
+
+  // --- 2 What is counted: every status (and excluded Function Units) of these assets, and how it counts
+  const pool = ctx.assets.filter(a => stockGroup(a));
+  const fuOut = (a: Asset) => { const fu = a.functionUnit.toLowerCase(); return !!fu && maps.stockExclude.some(x => fu.indexOf(x) >= 0); };
+  const keyOf = (a: Asset) => fuOut(a) ? "\u0001Function Unit excluded" : (a.status || "(blank)");
+  const counted: Cell[][] = Array.from(groupBy(pool, a => keyOf(a)).entries()).map(e => {
+    const fu = e[0].charAt(0) === "\u0001";
+    return [fu ? `Function Unit excluded (${maps.stockExclude.join(", ")})` : e[0], fu ? STOCK_OUT : stockBucket(e[1][0], maps),
+      e[1].filter(a => stockGroup(a) === STOCK_NOTEBOOKS).length, e[1].filter(a => stockGroup(a) === STOCK_HEADSETS).length] as Cell[];
+  }).sort((x, y) => [STOCK_USE, STOCK_STOCK, STOCK_OUT].indexOf(String(x[1])) - [STOCK_USE, STOCK_STOCK, STOCK_OUT].indexOf(String(y[1])) ||
+    (y[2] as number) + (y[3] as number) - (x[2] as number) - (x[3] as number));
+  r = sectionTitle(ws, r, "2. What is counted", "Change it on the Mappings tab: 'StockStatus | Reserved | Exclude' (or In use / In stock), " +
+    "'StockExclude | <Function Unit text>' to leave out a Function Unit, 'Headset | <model text> | Wired / Wireless'");
+  const cTop = r + 1;
+  r = addTable(ws, r, "tblStockCounted", ["Status", "Counted As", "Notebooks", "Headsets"], counted, { widths: [], count: [2, 3] });
+  counted.forEach((x, i) => ws.getRangeByIndexes(cTop + i, 1, 1, 1).getFormat().getFill().setColor(
+    x[1] === STOCK_USE ? "#E2EFDA" : x[1] === STOCK_STOCK ? "#DDEBF7" : "#F2F2F2"));
+
+  // --- 3-4 Per model, most stock first (headsets with wired / wireless)
   const byModel = (group: string): Cell[][] => Array.from(groupBy(ctx.assets.filter(a => stockGroup(a) === group &&
-    (a.stage === IN_USE || a.stage === STOCK)), a => a.assetClass + "\u0001" + (a.model || "(no model)")).entries()).map(e => {
-    const [cls, model] = e[0].split("\u0001"), use = e[1].filter(a => a.stage === IN_USE), st = e[1].filter(a => a.stage === STOCK).length;
-    const dep = deployRate(use, ctx);
-    return [model, cls, use.length, st, use.length + st ? use.length / (use.length + st) : "", monthly ? dep : "", monthly && dep ? st / dep : ""] as Cell[];
-  }).sort((x, y) => (y[3] as number) - (x[3] as number) || (y[2] as number) - (x[2] as number)).slice(0, 100);
-  const modelHeader = ["Model", "Asset Type", "In Use", "In Stock", "Utilization", "Deployed This Month", "Months of Cover"];
-  const modelOpts: TableOpts = { widths: [260, 110, 90, 90, 110, 100, 100], count: [2, 3, 5], pct: [4], num: [6] };
-  r = sectionTitle(ws, r, "2. Notebooks by model", "Most stock first");
-  r = addTable(ws, r, "tblStockNotebookModels", modelHeader, byModel(STOCK_NOTEBOOKS), modelOpts);
-  r = sectionTitle(ws, r, "3. Headsets by model", "Type Headset and headset models under Zubehör-Client; most stock first");
-  addTable(ws, r, "tblStockHeadsetModels", modelHeader, byModel(STOCK_HEADSETS), modelOpts);
+    stockBucket(a, maps) !== STOCK_OUT), a => a.assetClass + "\u0001" + (a.model || "(no model)")).entries()).map(e => {
+    const [cls, model] = e[0].split("\u0001"), use = e[1].filter(a => stockBucket(a, maps) === STOCK_USE);
+    const st = e[1].filter(a => stockBucket(a, maps) === STOCK_STOCK).length, dep = deployRate(use, ctx);
+    return [model, cls, group === STOCK_HEADSETS ? headsetConnection(e[1][0], maps) : "", use.length, st,
+      use.length + st ? use.length / (use.length + st) : "", monthly ? dep : "", monthly && dep ? st / dep : ""] as Cell[];
+  }).sort((x, y) => (y[4] as number) - (x[4] as number) || (y[3] as number) - (x[3] as number)).slice(0, 150);
+  const modelOpts: TableOpts = { widths: [], count: [3, 4, 6], pct: [5], num: [7] };
+  const head = (c: string) => ["Model", "Asset Type", c, "In Use", "In Stock", "Utilization", "Deployed This Month", "Months of Cover"];
+  r = sectionTitle(ws, r, "3. Notebooks by model", "Most stock first");
+  r = addTable(ws, r, "tblStockNotebookModels", head("").filter((h, i) => i !== 2), byModel(STOCK_NOTEBOOKS).map(x => x.filter((v, i) => i !== 2)),
+    { widths: [], count: [2, 3, 5], pct: [4], num: [6] });
+  r = sectionTitle(ws, r, "4. Headsets by model", "Type Headset and headset models under Zubehör-Client; most stock first");
+  addTable(ws, r, "tblStockHeadsetModels", head("Wired / Wireless"), byModel(STOCK_HEADSETS), modelOpts);
 }
 
 // Pivot & Summary: key figures (linked to the detail tabs), the summary by type, status changes, new-asset breakdowns

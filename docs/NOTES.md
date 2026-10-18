@@ -74,8 +74,16 @@ The spec is the "Monthly Asset Reconciliation Copilot Agent" instructions, writt
   became Scrapped or Inactive; listed first), Validation Result (dropdown: Validated / Not validated / Under
   investigation) and Validation Note. Result and Note are kept between runs (by Asset no.) and replace
   "[add validation note]" in the email.
-- **Email 4.1 detail (2026-10-18):** Scrapped - every Monitor, Notebook and Zubehör-Client asset is listed (asset no.,
-  serial, Spider comment, "[add validation note]"), other types as a count; Inactive, Lost and Stolen - every asset listed.
+- **Email 4.1 (2026-10-18, second version):** per status the count and the 3 main reasons; Scrapped and Inactive as
+  counts per type with the validation progress (validated / not validated / under investigation / pending); Lost and
+  Stolen asset by asset (when 10 or fewer). 4.2 lists only the assets marked Not validated or Under investigation
+  (up to 20). Everything else stays on the Scrap & Inactive Assets tab.
+- **Stock utilisation rules (2026-10-18):** in use = In operation; in stock = In stock, Reserved, Ready for use, To
+  install, Building; everything else left out. Mappings: "StockStatus | <status> | In use / In stock / Exclude",
+  "StockExclude | <Function Unit text>" (contains, any case), "Headset | <model text> | Wired / Wireless". The Stock tab's
+  "What is counted" table shows every status and how it counted. Headsets split wired / wireless from the model name.
+- **PowerPoint prompt (2026-10-18):** 4 executive slides (at a glance, inventory movement, scrapped / inactive / lost with
+  validation, POs + stock + next steps); titles state the message; numbers as large figures and tables.
 - **Email 2.1** lists, under each PO, its models on Spider (type - model: count) and the PO lines not on Spider yet.
 
 - **Stock utilisation = Notebooks and Headsets only (user decision, 2026-10-18).** Headsets = type "Headset" plus

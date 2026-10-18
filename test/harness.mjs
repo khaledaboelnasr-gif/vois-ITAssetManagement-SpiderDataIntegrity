@@ -166,15 +166,17 @@ if (process.env.POFILL) {
   console.log("POFILL: completed", poFilled, "to-do row(s)");
 }
 // SCRAPFILL=1: validate the first asset that needs it on Scrap & Inactive Assets; the re-run must keep it and use it in the email
-let scrapFilled = "";
+let scrapFilled = "", scrapFilled2 = "";
 if (process.env.SCRAPFILL) {
   const ss = wb.getWorksheet("Scrap & Inactive Assets"), t = ss.tableRanges.find(x => x.name === "tblStatusChanges");
   const head = []; for (let j = 0; j < t.w; j++) head.push(ss.cells.get(`${t.r},${t.c + j}`));
-  for (let i = 1; i < t.h; i++) if (ss.cells.get(`${t.r + i},${t.c + head.indexOf("Needs Validation")}`) === "Yes") {
-    scrapFilled = ss.cells.get(`${t.r + i},${t.c}`);
-    ss.cells.set(`${t.r + i},${t.c + head.indexOf("Validation Result")}`, "Validated");
-    ss.cells.set(`${t.r + i},${t.c + head.indexOf("Validation Note")}`, "Checked on site");
-    break;
+  // the first asset that needs validation: Validated; the second: Not validated (must be listed under 4.2)
+  let k = 0;
+  for (let i = 1; i < t.h && k < 2; i++) if (ss.cells.get(`${t.r + i},${t.c + head.indexOf("Needs Validation")}`) === "Yes") {
+    if (!k) scrapFilled = ss.cells.get(`${t.r + i},${t.c}`); else scrapFilled2 = ss.cells.get(`${t.r + i},${t.c}`);
+    ss.cells.set(`${t.r + i},${t.c + head.indexOf("Validation Result")}`, k ? "Not validated" : "Validated");
+    ss.cells.set(`${t.r + i},${t.c + head.indexOf("Validation Note")}`, k ? "Asset still with user" : "Checked on site");
+    k++;
   }
   console.log("SCRAPFILL: validated", scrapFilled);
 }
@@ -187,7 +189,8 @@ if (process.env.SHARE !== "1" && !process.env.NORERUN) { // re-running on the sa
   if (!process.env.POJSON) assert.equal(poCount(res2), poCount(res) + poFilled, "re-run reads the user's PO rows (and the completed to-do rows) once");
   if (process.env.SCRAPFILL) {
     assert.ok(scrapFilled, "an asset needed validation");
-    assert.ok(res2.emailBody.includes(`Asset no: ${scrapFilled}`) && res2.emailBody.includes("Validated: Checked on site"), "the validation is kept and used in the email");
+    assert.ok(/validated 1/.test(res2.emailBody), "the validated asset is counted in the email");
+    assert.ok(res2.emailBody.includes(`Asset no: ${scrapFilled2}`) && res2.emailBody.includes("Not validated: Asset still with user"), "a not-validated asset is listed for follow-up");
     const ss = wb.getWorksheet("Scrap & Inactive Assets"); assert.ok([...ss.cells.values()].includes("Checked on site"), "the note is still on the tab");
   }
   if (process.env.POFILL) assert.ok(!res2.reconciliation.some(l => /Pending/.test(l)), "edits on POs Validated win over the PO tab");
