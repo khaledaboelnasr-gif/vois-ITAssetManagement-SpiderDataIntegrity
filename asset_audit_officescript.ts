@@ -231,7 +231,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.18.5";
+const SCRIPT_VERSION = "2026.10.18.6";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -3295,10 +3295,14 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
     `${OPERATIONAL_STATUSES.join(" or ")} since ${prevName}: ${rc.operational.length} (Scrapped ${scrapped}, Lost ` +
     `${rc.operational.length - scrapped}). ${rc.changes.length - rc.operational.length} other status changes are excluded (see Pivot & Summary).`);
   backLink(ws);
-  addTable(ws, 3, "tblStatusChanges", CHANGE_HEADER, rc.operational.map(c => [c.cur.assetId, c.cur.serial, c.cur.status, c.prev.status,
+  // The 13 standard columns, then the export's own comments on each asset (when the export has those columns)
+  const comments: [string, (x: Asset) => string][] = ([["Status comment", (x: Asset) => x.statusComment], ["Comment", (x: Asset) => x.comment]] as
+    [string, (x: Asset) => string][]).filter(c => ctx.cols.has(c[0] === "Comment" ? "comment" : "statusComment"));
+  addTable(ws, 3, "tblStatusChanges", CHANGE_HEADER.concat(comments.map(c => c[0])), rc.operational.map(c => ([c.cur.assetId, c.cur.serial, c.cur.status, c.prev.status,
     c.transition, c.cur.assetClass, c.cur.model, dateSerial(c.cur.purchase), c.cur.po, dateSerial(c.cur.lastSeen), c.cur.functionUnit,
-    dateSerial(c.cur.created), dateSerial(c.cur.updated)]), { widths: [110, 110, 110, 120, 200, 110, 150, 95, 110, 120, 100, 120, 120],
-    text: [0, 1, 8, 10], date: [7], datetime: [9, 11, 12], freeze: true });
+    dateSerial(c.cur.created), dateSerial(c.cur.updated)] as Cell[]).concat(comments.map(k => k[1](c.cur)))),
+    { widths: [110, 110, 110, 120, 200, 110, 150, 95, 110, 120, 100, 120, 120, 320, 320], text: [0, 1, 8, 10, 13, 14], date: [7],
+      datetime: [9, 11, 12], wrap: [13, 14], freeze: true });
 
   // --- POs Validated: the one place to enter PO validation (see buildPoSheet)
   buildPoSheet(wb, ctx);
