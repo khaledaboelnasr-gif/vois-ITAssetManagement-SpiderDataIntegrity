@@ -82,6 +82,9 @@ The spec is the "Monthly Asset Reconciliation Copilot Agent" instructions, writt
   install, Building; everything else left out. Mappings: "StockStatus | <status> | In use / In stock / Exclude",
   "StockExclude | <Function Unit text>" (contains, any case), "Headset | <model text> | Wired / Wireless". The Stock tab's
   "What is counted" table shows every status and how it counted. Headsets split wired / wireless from the model name.
+  Reserved counts as stock. Function Units "VOIS_EG Scrape Warehouse" and "VOIS_EG Unreturned Devices" are left out by
+  default (user decision, 2026-10-18) and reported on the Stock tab (5: summary by unit, category, status, model; 6: every
+  asset) and in the email's section 5.
 - **PowerPoint prompt (2026-10-18):** 4 executive slides (at a glance, inventory movement, scrapped / inactive / lost with
   validation, POs + stock + next steps); titles state the message; numbers as large figures and tables.
 - **Email 2.1** lists, under each PO, its models on Spider (type - model: count) and the PO lines not on Spider yet.

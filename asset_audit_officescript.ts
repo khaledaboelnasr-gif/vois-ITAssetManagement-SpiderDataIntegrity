@@ -231,7 +231,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.18.9";
+const SCRIPT_VERSION = "2026.10.18.10";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -1867,7 +1867,7 @@ function monthlyReport(ctx: Ctx): MonthlyReport {
   line(`${L1}Full list with comments, reasons and validation: Scrap & Inactive Assets tab.`);
   line("");
   head("5. Stock utilization:");
-  stockLines(ctx).forEach(t => line(t));
+  stockLines(ctx).concat(excludedLines(ctx)).forEach(t => line(t));
   line("");
   line("Best regards,");
 
@@ -2524,9 +2524,15 @@ function stockGroup(a: Asset): string {
 //              and every asset whose Function Unit is excluded
 // Mappings rows change this: "StockStatus | Reserved | Exclude" (or In use / In stock), "StockExclude | <Function Unit text>"
 const STOCK_USE = "In use", STOCK_STOCK = "In stock", STOCK_OUT = "Left out";
+// Function Units left out of stock utilization (user decision, 2026-10-18), reported on their own; Mappings rows
+// "StockExclude | <text>" add more. Compared without case, spaces or punctuation, and "contains".
+const STOCK_EXCLUDE_FU = ["VOIS_EG Scrape Warehouse", "VOIS_EG Unreturned Devices"];
+function excludedFU(a: Asset, maps: Mappings): boolean {
+  const fu = compactKey(a.functionUnit);
+  return !!fu && STOCK_EXCLUDE_FU.concat(maps.stockExclude).some(x => compactKey(x) && fu.indexOf(compactKey(x)) >= 0);
+}
 function stockBucket(a: Asset, maps: Mappings): string {
-  const fu = a.functionUnit.toLowerCase();
-  if (fu && maps.stockExclude.some(x => fu.indexOf(x) >= 0)) { return STOCK_OUT; }
+  if (excludedFU(a, maps)) { return STOCK_OUT; }
   const own = maps.stockStatus.get(compactKey(a.status));
   if (own) { return own; }
   return a.stage === IN_USE ? STOCK_USE : a.stage === STOCK ? STOCK_STOCK : STOCK_OUT;
@@ -2560,7 +2566,7 @@ function buildStockSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
   progress("Writing Stock & Utilisation");
   const monthly = ctx.recon.available, maps = ctx.maps;
   const ws = newSheet(wb, "Stock & Utilisation", "Stock Utilization - Notebooks and Headsets - " + monthName(ctx.period),
-    "Utilization = in use / (in use + in stock). Table 2 shows exactly which statuses count. Headsets = type Headset + " +
+    "Utilization = in use / (in use + in stock). Table 2 shows exactly which statuses count; tables 5-6 the excluded Function Units. Headsets = type Headset + " +
     "headset models under Zubehör-Client, split into wired and wireless by model name.");
   backLink(ws);
   const sum = stockSummary(ctx);
@@ -2575,11 +2581,10 @@ function buildStockSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
 
   // --- 2 What is counted: every status (and excluded Function Units) of these assets, and how it counts
   const pool = ctx.assets.filter(a => stockGroup(a));
-  const fuOut = (a: Asset) => { const fu = a.functionUnit.toLowerCase(); return !!fu && maps.stockExclude.some(x => fu.indexOf(x) >= 0); };
-  const keyOf = (a: Asset) => fuOut(a) ? "\u0001Function Unit excluded" : (a.status || "(blank)");
+  const keyOf = (a: Asset) => excludedFU(a, maps) ? "\u0001" + a.functionUnit : (a.status || "(blank)");
   const counted: Cell[][] = Array.from(groupBy(pool, a => keyOf(a)).entries()).map(e => {
     const fu = e[0].charAt(0) === "\u0001";
-    return [fu ? `Function Unit excluded (${maps.stockExclude.join(", ")})` : e[0], fu ? STOCK_OUT : stockBucket(e[1][0], maps),
+    return [fu ? `Function Unit: ${e[0].slice(1)} (any status - see table 5)` : e[0], fu ? STOCK_OUT : stockBucket(e[1][0], maps),
       e[1].filter(a => stockGroup(a) === STOCK_NOTEBOOKS).length, e[1].filter(a => stockGroup(a) === STOCK_HEADSETS).length] as Cell[];
   }).sort((x, y) => [STOCK_USE, STOCK_STOCK, STOCK_OUT].indexOf(String(x[1])) - [STOCK_USE, STOCK_STOCK, STOCK_OUT].indexOf(String(y[1])) ||
     (y[2] as number) + (y[3] as number) - (x[2] as number) - (x[3] as number));
@@ -2604,7 +2609,29 @@ function buildStockSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
   r = addTable(ws, r, "tblStockNotebookModels", head("").filter((h, i) => i !== 2), byModel(STOCK_NOTEBOOKS).map(x => x.filter((v, i) => i !== 2)),
     { widths: [], count: [2, 3, 5], pct: [4], num: [6] });
   r = sectionTitle(ws, r, "4. Headsets by model", "Type Headset and headset models under Zubehör-Client; most stock first");
-  addTable(ws, r, "tblStockHeadsetModels", head("Wired / Wireless"), byModel(STOCK_HEADSETS), modelOpts);
+  r = addTable(ws, r, "tblStockHeadsetModels", head("Wired / Wireless"), byModel(STOCK_HEADSETS), modelOpts);
+
+  // --- 5-6 The excluded Function Units: not in the utilization, reported here in full
+  const out = pool.filter(a => excludedFU(a, maps));
+  const outRows: Cell[][] = Array.from(groupBy(out, a => [a.functionUnit, stockGroup(a), a.status || "(blank)", a.model || "(no model)"].join("\u0001")).entries())
+    .map(e => { const k = e[0].split("\u0001");
+      return [k[0], k[1], k[1] === STOCK_HEADSETS ? headsetConnection(e[1][0], maps) : "", k[2], k[3], e[1].length] as Cell[]; })
+    .sort((x, y) => String(x[0]).localeCompare(String(y[0])) || String(x[1]).localeCompare(String(y[1])) || (y[5] as number) - (x[5] as number));
+  r = sectionTitle(ws, r, "5. Excluded Function Units - summary", `Not counted in the utilization above: ${fmtNum(out.length)} notebooks and ` +
+    `headsets in ${STOCK_EXCLUDE_FU.concat(maps.stockExclude).join(", ")}`);
+  r = addTable(ws, r, "tblStockExcludedSummary", ["Function Unit", "Category", "Wired / Wireless", "Status", "Model", "Assets"], outRows, { widths: [], count: [5] });
+  r = sectionTitle(ws, r, "6. Excluded Function Units - assets", out.length > 5000 ? "First 5,000; filter the export for the rest" : "Every asset");
+  addTable(ws, r, "tblStockExcludedAssets", ["Asset no.", "Function Unit", "Category", "Asset Type", "Model", "Status", "Serial no.", "Last scan", "Status comment"],
+    out.slice(0, 5000).map(a => [a.assetId, a.functionUnit, stockGroup(a), a.assetClass, a.model, a.status, a.serial, dateSerial(a.lastSeen), a.statusComment]),
+    { widths: [], text: [0, 6], datetime: [7] });
+}
+// Email line for the excluded Function Units: per unit, notebooks and headsets
+function excludedLines(ctx: Ctx): string[] {
+  const out = ctx.assets.filter(a => stockGroup(a) && excludedFU(a, ctx.maps));
+  if (!out.length) { return []; }
+  return ["• Not counted (excluded Function Units):"].concat(Array.from(groupBy(out, a => a.functionUnit).entries()).map(e =>
+    `      o ${e[0]}: ${fmtNum(e[1].filter(a => stockGroup(a) === STOCK_NOTEBOOKS).length)} notebooks, ` +
+    `${fmtNum(e[1].filter(a => stockGroup(a) === STOCK_HEADSETS).length)} headsets`));
 }
 
 // Pivot & Summary: key figures (linked to the detail tabs), the summary by type, status changes, new-asset breakdowns

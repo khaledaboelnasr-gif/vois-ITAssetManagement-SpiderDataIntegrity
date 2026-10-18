@@ -62,6 +62,8 @@ def make(i, when):
          "Location": random.choice(sites), "Company": company, "Comment": "", "Status comment": "", "_scanned": scanned}
     if scanned and status == "In operation":
         a["Last scan"] = when - timedelta(days=random.choice([1, 2, 3, 5, 8, 12, 20, 70]), hours=random.randint(0, 9))
+    if code == "EG" and i % 41 == 0:  # the two Function Units left out of stock utilization
+        a["Function Unit"] = "VOIS_EG Scrape Warehouse" if i % 2 else "VOIS_EG Unreturned Devices"
     if i % 97 == 0 and a["Serial no."]:
         a["Serial no."] = random.choice(["N/A", "To be filled by O.E.M.", "0"])
     return a
