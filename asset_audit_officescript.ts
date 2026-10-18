@@ -2552,11 +2552,18 @@ function stockBucket(a: Asset, maps: Mappings): string {
 const HEADSET_VR = /quest|oculus|\bvr\b/;
 const HEADSET_WIRELESS = /wireless|bluetooth|\bbt\b|voyager|savi|evolve2? ?(55|65|75|85)\b|engage|\bdect\b|\badapt\b|\blink\b|\bwl\b|\bbh ?\d+/;
 const HEADSET_WIRED = /wired|\busb\b|blackwire|evolve2? ?(20|30|40|50|80)\b|\bsc ?\d+|\bpc ?\d+|supra|jack|3\.5|corded|encore|\buc\b/;
+// Worked out once per model text
+const HS_MEMO = { map: new Map<string, string>(), maps: "" };
 function headsetConnection(a: Asset, maps: Mappings): string {
+  const key = maps.headset.map(h => h.join("=")).join("|");
+  if (HS_MEMO.maps !== key) { HS_MEMO.map.clear(); HS_MEMO.maps = key; }
+  const hit = HS_MEMO.map.get(a.model);
+  if (hit !== undefined) { return hit; }
   const m = a.model.toLowerCase(), t = m.replace(/[^a-z0-9.]+/g, " ");
   const own = maps.headset.find(h => m.indexOf(h[0]) >= 0);
-  if (own) { return own[1]; }
-  return HEADSET_VR.test(t) ? "VR headset" : HEADSET_WIRELESS.test(t) ? "Wireless" : HEADSET_WIRED.test(t) ? "Wired" : "Not sure (check model)";
+  const c = own ? own[1] : HEADSET_VR.test(t) ? "VR headset" : HEADSET_WIRELESS.test(t) ? "Wireless" : HEADSET_WIRED.test(t) ? "Wired" : "Not sure (check model)";
+  HS_MEMO.map.set(a.model, c);
+  return c;
 }
 interface StockRow { label: string; use: number; stock: number; deployed: number; }
 // [Notebooks, Headsets (all), Headsets - wired, Headsets - wireless, (Headsets - not sure, when any)]
