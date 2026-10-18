@@ -231,7 +231,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.18.7";
+const SCRIPT_VERSION = "2026.10.18.8";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -251,7 +251,11 @@ const VCAMS_STATUSES: [string, string][] = [
 // Statuses with the same meaning written another way (compared without case, spaces or punctuation)
 const STATUS_SPELLINGS: Record<string, string> = { "authorizedinactive": "Authorised inactive", "inoperations": "In operation" };
 // Current statuses that go on the operational "Scrap & Inactive Assets" list when they are new this month
-const OPERATIONAL_STATUSES = ["Scrapped", "Lost"];
+const OPERATIONAL_STATUSES = ["Scrapped", "Lost", "Inactive"];  // Inactive added (user decision, 2026-10-18)
+// "Scrapped, Lost or Inactive"
+function orList(list: string[]): string {
+  return list.length < 2 ? list.join("") : list.slice(0, -1).join(", ") + " or " + list[list.length - 1];
+}
 const STAGE_RULES: [string, RegExp][] = [
   [LOST, /\b(lost|stolen|missing|theft)\b/],
   [DISPOSED, /dispos|scrap|\bsold\b|marketed|donat|recycl|written ?off|write ?off|destroy|returned to (vendor|lessor|supplier)|lease return/],
@@ -566,7 +570,7 @@ interface Devices { source: string; list: DeviceRef[]; bySerial: Map<string, Dev
 interface Mappings {
   status: Map<string, string>; types: Map<string, [string, string]>; market: [string, string][]; limits: Map<string, number>;
   lifecycle: Map<string, number>; hostname: Map<string, RegExp>; columns: Map<string, string>; off: Set<string>;
-  source: string; applied: number; problems: string[];
+  source: string; applied: number; problems: string[]; reasons: [string, string][];
 }
 interface TabInfo { name: string; headerAbs: number; lastAbs: number; colAbs: Record<string, number>; rows: number; }
 interface AssetLoad {
@@ -592,7 +596,7 @@ interface Recon {
   serialChanges: SerialChange[]; serialChecked: boolean;
   prevByType: Map<string, number>; curByType: Map<string, number>; newAssets: Asset[]; removed: Asset[]; existing: number;
   changes: StatusChange[]; operational: StatusChange[]; unknownStatuses: Map<string, number>; unlistedTypes: Map<string, number>;
-  fromSnapshot: boolean;
+  fromSnapshot: boolean; validation: Map<string, [string, string]>;
 }
 interface Ctx {
   assets: Asset[]; asOf: Date; period: string; markets: string[]; users: Users; devices: Devices; cols: Set<string>;
@@ -1275,7 +1279,7 @@ function loadPo(wb: ExcelScript.Workbook, sheets: string[], ownSheet: string, js
 function emptyMappings(): Mappings {
   return { status: new Map<string, string>(), types: new Map<string, [string, string]>(), market: [], limits: new Map<string, number>(),
     lifecycle: new Map<string, number>(), hostname: new Map<string, RegExp>(), columns: new Map<string, string>(), off: new Set<string>(),
-    source: "None", applied: 0, problems: [] };
+    source: "None", applied: 0, problems: [], reasons: [] };
 }
 // Mappings rows {Kind, Value, MapsTo} from the central table (mappingsJson) or a 'Mappings' sheet in this workbook
 function loadMappings(wb: ExcelScript.Workbook, json: string | undefined): Mappings {
@@ -1332,6 +1336,8 @@ function loadMappings(wb: ExcelScript.Workbook, json: string | undefined): Mappi
     } else if (kind === "hostnamepattern" || kind === "hostname pattern") {
       try { maps.hostname.set(value.toLowerCase() || "*", new RegExp(to, "i")); maps.applied++; }
       catch (e) { maps.problems.push(`${line}: not a valid pattern`); }
+    } else if (kind === "reason") {
+      if (value && to) { maps.reasons.push([value.toLowerCase(), to]); maps.applied++; } else { maps.problems.push(`${line}: needs a keyword and a reason`); }
     } else if (kind === "check") {
       const code = value.toUpperCase();
       if (!FLAG_INFO[code]) { maps.problems.push(`${line}: unknown check`); }
@@ -1452,7 +1458,7 @@ function emptyRecon(): Recon {
   return { available: false, source: "", prevPeriod: "", curPeriod: "", prevDay: null, curDay: null, prevRows: 0, curRows: 0, prevUnique: 0, curUnique: 0,
     prevBlank: 0, curBlank: 0, prevDup: [], curDup: [], serialChanges: [], serialChecked: false, prevByType: new Map<string, number>(), curByType: new Map<string, number>(),
     newAssets: [], removed: [], existing: 0, changes: [], operational: [], unknownStatuses: new Map<string, number>(),
-    unlistedTypes: new Map<string, number>(), fromSnapshot: false };
+    unlistedTypes: new Map<string, number>(), fromSnapshot: false, validation: new Map<string, [string, string]>() };
 }
 const SERIAL_ADDED = "Serial added (was blank or a placeholder)", SERIAL_REMOVED = "Serial removed (now blank or a placeholder)",
   SERIAL_CHANGED = "Serial changed";
@@ -1532,7 +1538,7 @@ function qualityChecks(ctx: Ctx): Cell[][] {
     !ctx.assets.some(a => prevIds.has(idKey(a.assetId))));
   const badOps = rc.operational.filter(c => !c.prev || compactKey(c.prev.status) === compactKey(c.cur.status) ||
     !OPERATIONAL_STATUSES.some(s => compactKey(s) === compactKey(c.cur.status))).length;
-  check("Every Scrap & Inactive row: in both exports, a real change, now Scrapped or Lost", 0, badOps, badOps === 0);
+  check(`Every Scrap & Inactive row: in both exports, a real change, now ${orList(OPERATIONAL_STATUSES)}`, 0, badOps, badOps === 0);
   if (rc.serialChecked) {
     const ids = new Set<string>(rc.serialChanges.map(c => idKey(c.cur.assetId)));
     const bad = rc.serialChanges.filter(c => !c.prev || serialCompare(c.prev.serial) === serialCompare(c.cur.serial)).length;
@@ -1676,6 +1682,10 @@ function stockLines(ctx: Ctx): string[] {
     (ctx.recon.available ? `; ${fmtNum(x.deployed)} deployed this month` + (x.deployed ? `, stock covers about ${(x.stock / x.deployed).toFixed(1)} months` : "") : ""));
 }
 // The Spider comments of an asset for the email: the status comment first, then the general comment if it differs
+// The team's validation from the Scrap & Inactive Assets tab, or the placeholder to complete
+function validationText(v: [string, string] | undefined): string {
+  return v && (v[0] || v[1]) ? [v[0], v[1]].filter(x => x).join(": ") : EMAIL_NOTE;
+}
 function spiderComment(a: Asset): string {
   const sc = a.statusComment.trim(), c = a.comment.trim();
   return (sc ? ` - Spider Comment: ${short(sc, 200)}` : "") + (c && c !== sc ? ` - ${sc ? "Comment" : "Spider Comment"}: ${short(c, 200)}` : "");
@@ -1837,7 +1847,7 @@ function monthlyReport(ctx: Ctx): MonthlyReport {
         const ofModel = ofType.filter(c => (c.cur.model || "(no model)") === m);
         line(`${L3}${m}: ${ofModel.length}`);
         ofModel.forEach(c => line(`${L4}Asset no: ${c.cur.assetId}` + (c.cur.serial ? ` - Serial number: ${c.cur.serial}` : "") +
-          spiderComment(c.cur) + " - " + EMAIL_NOTE));
+          spiderComment(c.cur) + " - " + validationText(rc.validation.get(idKey(c.cur.assetId)))));
       });
     });
   });
@@ -1867,7 +1877,7 @@ function monthlyReport(ctx: Ctx): MonthlyReport {
     (rc.serialChecked ? `, Serial number changes ${fmtNum(rc.serialChanges.length)}` : "") + ". Bullets: " +
     (rc.newAssets.length ? `new by type ${top(countBy(rc.newAssets.map(a => a.assetClass)), 3)}; by PO ${byPo.size ? top(byPo, 2) : "none"}, ` +
       `blank PurchaseNo ${fmtNum(blankPo)}` : "no new assets") +
-    (rc.operational.length ? `; scrapped or lost by type ${top(countBy(rc.operational.map(c => c.cur.assetClass)), 3)}` : "") +
+    (rc.operational.length ? `; scrapped, lost or inactive by type ${top(countBy(rc.operational.map(c => c.cur.assetClass)), 3)}` : "") +
     (rc.serialChecked && rc.serialChanges.length ? `; serials ${top(countBy(rc.serialChanges.map(c => serialShort(c.change))), 3)}` : "") +
     (rc.removed.length ? "; removed assets are to be reviewed, not treated as scrapped" : "") + "; stock utilization " +
     stockSummary(ctx).slice(0, 2).map(x => `${x.label.replace(" (all)", "")} ${utilOf(x) === "" ? "-" : (100 * (utilOf(x) as number)).toFixed(1) + "%"}`).join(", ") + ".");
@@ -2664,7 +2674,7 @@ function buildSummarySheet(wb: ExcelScript.Workbook, ctx: Ctx, notes: string[]):
 
   // --- 3 Status changes
   r = sectionTitle(ws, trTitle, `3. Status changes since ${prevName}`, `${fmtNum(rc.changes.length)} in total; only changes ending in ` +
-    `${OPERATIONAL_STATUSES.join(" or ")} are listed on Scrap & Inactive Assets (${fmtNum(rc.operational.length)})`);
+    `${orList(OPERATIONAL_STATUSES)} are listed on Scrap & Inactive Assets (${fmtNum(rc.operational.length)})`);
   const tr = countBy(rc.changes.map(c => c.transition));
   addTable(ws, r, "tblStatusTransitions", ["Status Change", "Assets", "On Scrap & Inactive Assets?"], keysByCount(tr).map(t =>
     [t, tr.get(t) || 0, OPERATIONAL_STATUSES.some(st => t.endsWith("→ " + st)) ? "Yes" : "No"]), { widths: [], count: [1] });
@@ -2724,7 +2734,7 @@ function buildSummarySheet(wb: ExcelScript.Workbook, ctx: Ctx, notes: string[]):
     }
   };
   pivot("8. PivotTable - new assets by type", "NewAssetsPivot", "tblNewAssets", rc.newAssets.length, 9, ["Asset Type"], "Asset no.", false);
-  pivot("9. PivotTable - Scrapped / Lost by type and model", "StatusChangesPivot", "tblStatusChanges", rc.operational.length, 12,
+  pivot("9. PivotTable - Scrapped / Lost / Inactive by type and model", "StatusChangesPivot", "tblStatusChanges", rc.operational.length, 12,
     ["Current Asset Status", "Asset Type", "Model"], "Asset no.", false);
   pivot("10. PivotTable - PO quantities", "POValidationsPivot", "tblPOValidated", ctx.po.rows.length, 15, ["Purchase Number", "Model"], "Quantity", true);
 }
@@ -3245,6 +3255,49 @@ function buildPoSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
   ws.getRangeByIndexes(0, 1, 1, 1).getFormat().setColumnWidth(170);
   ws.getRangeByIndexes(0, 7, 1, 1).getFormat().setColumnWidth(190);
 }
+// Why an asset changed status, read from its Spider comments. The first matching rule wins; Mappings rows
+// "Reason | <keyword> | <reason>" come before the built-in rules.
+const CHANGE_REASONS: [RegExp, string][] = [
+  [/write[\s-]*off|writeoff/, "Write-off memo"],
+  [/death|deceased|passed away/, "Employee death"],
+  [/stolen|theft|robbery/, "Stolen"],
+  [/\blost\b|missing device/, "Lost"],
+  [/damag|broken|faulty|not working|defect|crack|burn|liquid|water/, "Damaged / faulty"],
+  [/end of life|\beol\b|obsolete|old model|life ?cycle|refresh/, "End of life / refresh"],
+  [/dispos|e-?waste|recycl|\bsold\b|auction|market/, "Disposal / sale"],
+  [/return|swap|replac|exchange|different asset|wrong asset/, "Returned / replaced"],
+  [/audit|inventory|reconcil|correction|not found|duplicate|wrong status/, "Inventory / data correction"],
+  [/\binc\d{6,}|\btt\b|ticket|incident/, "Incident ticket"]
+];
+function changeReason(a: Asset, maps: Mappings): string {
+  const text = `${a.statusComment} ${a.comment}`.toLowerCase().trim();
+  if (!text) { return "No comment"; }
+  const own = maps.reasons.find(r => text.indexOf(r[0]) >= 0);
+  if (own) { return own[1]; }
+  const hit = CHANGE_REASONS.find(r => r[0].test(text));
+  return hit ? hit[1] : "Other (see comment)";
+}
+// Scrapped or Inactive Notebooks, Monitors and Zubehör-Client are validated by the team (user decision, 2026-10-18)
+const VALIDATE_TYPES = ["Notebook", "Monitor", "Zubehör-Client"].map(t => compactKey(t));
+const VALIDATE_STATUSES = ["Scrapped", "Inactive"].map(t => compactKey(t));
+const VALIDATION_RESULTS = ["Validated", "Not validated", "Under investigation"];
+function needsValidation(a: Asset): boolean {
+  return VALIDATE_TYPES.indexOf(compactKey(a.assetClass)) >= 0 && VALIDATE_STATUSES.indexOf(compactKey(a.status)) >= 0;
+}
+// The team's Validation Result / Note from the previous run of this tab, by Asset no., so a re-run keeps them
+function readScrapValidation(wb: ExcelScript.Workbook): Map<string, [string, string]> {
+  const out = new Map<string, [string, string]>();
+  const t = wb.getTable("tblStatusChanges");
+  if (!t || t.getRowCount() === 0) { return out; }
+  const head = (t.getHeaderRowRange().getValues()[0] as Raw[]).map(v => String(v));
+  const id = head.indexOf("Asset no."), res = head.indexOf("Validation Result"), note = head.indexOf("Validation Note");
+  if (id < 0 || (res < 0 && note < 0)) { return out; }
+  (t.getRangeBetweenHeaderAndTotal().getValues() as Raw[][]).forEach(r => {
+    const v: [string, string] = [res < 0 ? "" : String(r[res]).trim(), note < 0 ? "" : String(r[note]).trim()];
+    if (v[0] || v[1]) { out.set(idKey(String(r[id])), v); }
+  });
+  return out;
+}
 // Optional fields stay blank when the export has no such column - never zero, N/A or invented
 function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
   const rc = ctx.recon, notes: string[] = [];
@@ -3294,19 +3347,45 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
 
   // --- Scrap & Inactive Assets / tblStatusChanges
   progress("Writing Scrap & Inactive Assets");
-  const scrapped = rc.operational.filter(c => compactKey(c.cur.status) === "scrapped").length;
+  rc.validation = readScrapValidation(wb);
+  const byStatus = countBy(rc.operational.map(c => c.cur.status));
+  const toValidate = rc.operational.filter(c => needsValidation(c.cur));
+  const validated = toValidate.filter(c => (rc.validation.get(idKey(c.cur.assetId)) || ["", ""])[0]).length;
   ws = newSheet(wb, "Scrap & Inactive Assets", `Scrap & Inactive Assets - ${curName}`, `Assets whose status changed to ` +
-    `${OPERATIONAL_STATUSES.join(" or ")} since ${prevName}: ${rc.operational.length} (Scrapped ${scrapped}, Lost ` +
-    `${rc.operational.length - scrapped}). ${rc.changes.length - rc.operational.length} other status changes are excluded (see Pivot & Summary).`);
+    `${orList(OPERATIONAL_STATUSES)} since ${prevName}: ${rc.operational.length} (` + OPERATIONAL_STATUSES.map(st => `${st} ${byStatus.get(st) || 0}`).join(", ") +
+    `). To validate (Notebooks, Monitors, Zubehör-Client - Scrapped or Inactive): ${validated} of ${toValidate.length} done. ` +
+    `${rc.changes.length - rc.operational.length} other status changes are excluded (see Pivot & Summary).`);
   backLink(ws);
   // The 13 standard columns, then the export's own comments on each asset (when the export has those columns)
   const comments: [string, (x: Asset) => string][] = ([["Status comment", (x: Asset) => x.statusComment], ["Comment", (x: Asset) => x.comment]] as
     [string, (x: Asset) => string][]).filter(c => ctx.cols.has(c[0] === "Comment" ? "comment" : "statusComment"));
-  addTable(ws, 3, "tblStatusChanges", CHANGE_HEADER.concat(comments.map(c => c[0])), rc.operational.map(c => ([c.cur.assetId, c.cur.serial, c.cur.status, c.prev.status,
-    c.transition, c.cur.assetClass, c.cur.model, dateSerial(c.cur.purchase), c.cur.po, dateSerial(c.cur.lastSeen), c.cur.functionUnit,
-    dateSerial(c.cur.created), dateSerial(c.cur.updated)] as Cell[]).concat(comments.map(k => k[1](c.cur)))),
-    { widths: [110, 110, 110, 120, 200, 110, 150, 95, 110, 120, 100, 120, 120, 320, 320], text: [0, 1, 8, 10, 13, 14], date: [7],
-      datetime: [9, 11, 12], wrap: [13, 14], freeze: true });
+  // Then why it changed (from the comments) and the team's validation: Validation Result / Note are kept between runs
+  const v0 = CHANGE_HEADER.length + comments.length;  // first column after the comments
+  const opRows = rc.operational.slice().sort((x, y) => (needsValidation(y.cur) ? 1 : 0) - (needsValidation(x.cur) ? 1 : 0));
+  addTable(ws, 3, "tblStatusChanges", CHANGE_HEADER.concat(comments.map(c => c[0]), ["Change Reason", "Needs Validation", "Validation Result", "Validation Note"]),
+    opRows.map(c => {
+      const v = rc.validation.get(idKey(c.cur.assetId)) || ["", ""];
+      return ([c.cur.assetId, c.cur.serial, c.cur.status, c.prev.status,
+        c.transition, c.cur.assetClass, c.cur.model, dateSerial(c.cur.purchase), c.cur.po, dateSerial(c.cur.lastSeen), c.cur.functionUnit,
+        dateSerial(c.cur.created), dateSerial(c.cur.updated)] as Cell[]).concat(comments.map(k => k[1](c.cur)),
+        [changeReason(c.cur, ctx.maps), needsValidation(c.cur) ? "Yes" : "", v[0], v[1]]);
+    }),
+    { widths: [110, 110, 110, 120, 200, 110, 150, 95, 110, 120, 100, 120, 120].concat(comments.map(() => 320), [190, 90, 160, 300]),
+      text: [0, 1, 8, 10].concat(comments.map((c, i) => 13 + i), [v0 + 3]), date: [7], datetime: [9, 11, 12],
+      wrap: comments.map((c, i) => 13 + i).concat([v0 + 3]), freeze: true });
+  // A dropdown on Validation Result; yellow while a row that needs validation has no result
+  try {
+    const dv = ws.getRangeByIndexes(4, v0 + 2, Math.max(1, opRows.length), 1).getDataValidation();
+    dv.clear();
+    dv.setRule({ list: { inCellDropDown: true, source: VALIDATION_RESULTS.join(",") } });
+    ws.getRangeByIndexes(4, 0, 1, 1).getValues();
+  } catch (e) { progress(`Scrap & Inactive Assets: dropdown not set (${String(e).slice(0, 80)})`); }
+  opRows.forEach((c, i) => {
+    if (needsValidation(c.cur)) {
+      ws.getRangeByIndexes(4 + i, v0 + 1, 1, 1).getFormat().getFont().setBold(true);
+      if (!(rc.validation.get(idKey(c.cur.assetId)) || ["", ""])[0]) { ws.getRangeByIndexes(4 + i, v0 + 2, 1, 2).getFormat().getFill().setColor("#FFF2CC"); }
+    }
+  });
 
   // --- POs Validated: the one place to enter PO validation (see buildPoSheet)
   buildPoSheet(wb, ctx);

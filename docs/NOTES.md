@@ -67,6 +67,13 @@ The spec is the "Monthly Asset Reconciliation Copilot Agent" instructions, writt
   Raised By, Purchase Date or a validation. Next run, the table is read back and merged with any PO tab (same Purchase
   Number + Model counts once; POs Validated wins); unfilled to-do rows are not PO data. poJson from the chat overrides
   both. Table 2 = result per PO (green matched, amber missing / pending, red variance / not found); table 3 = what to do.
+- **Scrap & Inactive Assets (2026-10-18):** now Scrapped, Lost and Inactive (status "Inactive"). After the 13 standard
+  columns and the export's Status comment / Comment: Change Reason (from the comments: write-off memo, employee death,
+  stolen, lost, damaged, end of life, disposal, returned / replaced, inventory correction, incident ticket, no comment,
+  other; Mappings rows "Reason | keyword | reason" come first), Needs Validation (Notebook, Monitor, Zubehör-Client that
+  became Scrapped or Inactive; listed first), Validation Result (dropdown: Validated / Not validated / Under
+  investigation) and Validation Note. Result and Note are kept between runs (by Asset no.) and replace
+  "[add validation note]" in the email.
 - **Email 4.1 detail (2026-10-18):** Scrapped - every Monitor, Notebook and Zubehör-Client asset is listed (asset no.,
   serial, Spider comment, "[add validation note]"), other types as a count; Inactive, Lost and Stolen - every asset listed.
 - **Email 2.1** lists, under each PO, its models on Spider (type - model: count) and the PO lines not on Spider yet.

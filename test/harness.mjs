@@ -165,6 +165,19 @@ if (process.env.POFILL) {
   }
   console.log("POFILL: completed", poFilled, "to-do row(s)");
 }
+// SCRAPFILL=1: validate the first asset that needs it on Scrap & Inactive Assets; the re-run must keep it and use it in the email
+let scrapFilled = "";
+if (process.env.SCRAPFILL) {
+  const ss = wb.getWorksheet("Scrap & Inactive Assets"), t = ss.tableRanges.find(x => x.name === "tblStatusChanges");
+  const head = []; for (let j = 0; j < t.w; j++) head.push(ss.cells.get(`${t.r},${t.c + j}`));
+  for (let i = 1; i < t.h; i++) if (ss.cells.get(`${t.r + i},${t.c + head.indexOf("Needs Validation")}`) === "Yes") {
+    scrapFilled = ss.cells.get(`${t.r + i},${t.c}`);
+    ss.cells.set(`${t.r + i},${t.c + head.indexOf("Validation Result")}`, "Validated");
+    ss.cells.set(`${t.r + i},${t.c + head.indexOf("Validation Note")}`, "Checked on site");
+    break;
+  }
+  console.log("SCRAPFILL: validated", scrapFilled);
+}
 if (process.env.SHARE !== "1" && !process.env.NORERUN) { // re-running on the same workbook must work (our sheets are skipped)
   const res2 = run();
   console.log("RERUN ok | assets", res2.assets, "| score", res2.integrityScore);
@@ -172,6 +185,11 @@ if (process.env.SHARE !== "1" && !process.env.NORERUN) { // re-running on the sa
   const poCount = x => +((x.reconciliation.find(l => l.startsWith("PO validation records processed")) || "").match(/: (\d+)/) || [0, 0])[1];
   console.log("PO rows: first run", poCount(res), "| re-run", poCount(res2));
   if (!process.env.POJSON) assert.equal(poCount(res2), poCount(res) + poFilled, "re-run reads the user's PO rows (and the completed to-do rows) once");
+  if (process.env.SCRAPFILL) {
+    assert.ok(scrapFilled, "an asset needed validation");
+    assert.ok(res2.emailBody.includes(`Asset no: ${scrapFilled}`) && res2.emailBody.includes("Validated: Checked on site"), "the validation is kept and used in the email");
+    const ss = wb.getWorksheet("Scrap & Inactive Assets"); assert.ok([...ss.cells.values()].includes("Checked on site"), "the note is still on the tab");
+  }
   if (process.env.POFILL) assert.ok(!res2.reconciliation.some(l => /Pending/.test(l)), "edits on POs Validated win over the PO tab");
   if (process.env.MARK) console.log("physical:", res2.runInfo.length, (res2.agentInput.match(/## 11\. Physical check\n(.*)/) || [])[1]);
 }

@@ -1,5 +1,5 @@
 VOIS ASSET AUDIT SCRIPT - OVERVIEW
-Script version 2026.10.18.7
+Script version 2026.10.18.8
 ====================================================================
 
 Use this to review the script and ask for changes. To ask for a change,
@@ -50,6 +50,10 @@ PIVOT & SUMMARY, top to bottom and left to right, each table under a numbered he
   3 Status changes - every transition, and whether it is on Scrap & Inactive Assets
   4-7 New assets - by type, by PurchaseNo, filled or empty PurchaseNo, by model
   8-10 PivotTables - new assets by type; Scrapped / Lost by type and model; PO quantities
+SCRAP & INACTIVE ASSETS: assets that became Scrapped, Lost or Inactive. Columns after the comments: Change Reason
+(why, read from the comments), Needs Validation (Notebooks, Monitors, Zubehör-Client that were scrapped or switched
+to inactive - listed first), Validation Result (pick from the list), Validation Note. Your validation is kept when
+the script runs again and goes into the email instead of "[add validation note]".
 POS VALIDATED: "How to use this tab" (3 steps), 1 Your PO validation - the one place to type PO data: dropdowns,
 yellow = still to fill, a to-do row for each PO on Spider with no validation yet; 2 Result per PO (green = matched);
 3 What still needs you. Your rows are kept between runs.
