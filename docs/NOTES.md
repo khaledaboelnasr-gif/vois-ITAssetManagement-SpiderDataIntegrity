@@ -61,6 +61,13 @@ The spec is the "Monthly Asset Reconciliation Copilot Agent" instructions, writt
 
 ## Key decisions
 
+- **Report only (user decision, 2026-10-18).** The script makes what the team already makes and sends each month,
+  plus stock utilisation, and nothing else: Monthly Email, Pivot & Summary, New Assets, Removed Assets (when any),
+  Serial Number Changes, Scrap & Inactive Assets, POs Validated, Stock & Utilisation. Tabs from earlier full-audit
+  runs are removed. The full audit (Executive Summary, Integrity Score, Exceptions, leavers, lifecycle, ...) is
+  still in the code: set `REPORT_ONLY = false` to get it back. The quality checks still run and are returned to
+  the flow, but are not written as a tab.
+
 - **Real export layout (2026-10-14 run).** The current Spider export has 22 columns in its own order (ID, Asset no.,
   Asset Type, Model, Status, ..., Comment, Status comment, ..., Updated, Legal Entity); the previous one has the 13
   standard headers. Both are matched by header name. `Updated` = AssetUpdateDate, `Asset Assignment Date` =

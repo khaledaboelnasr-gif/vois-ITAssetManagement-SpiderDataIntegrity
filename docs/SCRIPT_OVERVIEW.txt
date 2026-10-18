@@ -1,5 +1,5 @@
 VOIS ASSET AUDIT SCRIPT - OVERVIEW
-Script version 2026.10.14.13
+Script version 2026.10.18.1
 ====================================================================
 
 Use this to review the script and ask for changes. To ask for a change,
@@ -39,6 +39,11 @@ name the tab and section, for example:
 
 2. WHAT YOU GET - THE TABS, IN ORDER
 --------------------------------------------------------------------
+
+NOTE (2026-10-18): by default the script makes only the monthly report tabs: Monthly Email, Pivot & Summary,
+New Assets, Removed Assets (when any), Serial Number Changes, Scrap & Inactive Assets, POs Validated and
+Stock & Utilisation. The email has a "5. Stock utilization" section. The other tabs below are made only when
+REPORT_ONLY is set to false in the script.
 
 1) START HERE
    - How to use the workbook, and the run information: tabs read, columns found, references used.

@@ -103,7 +103,8 @@ if (process.env.BRIEFOUT) fs.writeFileSync(process.env.BRIEFOUT, agentInput.repl
 if (process.env.REPORTOUT) fs.writeFileSync(process.env.REPORTOUT, [res.emailSubject, "", res.emailBody, "", "--- PowerPoint prompt (" + res.pptPrompt.replace(/\n/g, " ").length + " characters)", res.pptPrompt].join("\n"));
 if (process.env.MARK) {
   const pc = wb.getWorksheet("Physical Check");
-  for (let r = 4; pc.cells.get(`${r},0`) !== undefined; r++) {
+  if (!pc) console.log("MARK skipped: no Physical Check tab (REPORT_ONLY mode)");
+  for (let r = 4; pc && pc.cells.get(`${r},0`) !== undefined; r++) {
     pc.cells.set(`${r},10`, r % 10 === 0 ? "N" : "Y"); pc.cells.set(`${r},11`, r % 7 === 0 ? "N" : "Y"); pc.cells.set(`${r},12`, "Y");
   }
 }

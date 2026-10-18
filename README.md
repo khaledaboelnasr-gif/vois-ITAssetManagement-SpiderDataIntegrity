@@ -55,9 +55,10 @@ It follows the same pattern as [vois-ticket-review](https://github.com/khaledabo
    - the current export on a tab named, for example, `2026-10 Current Export`;
    - optionally, a `PO Validation` tab with the user's PO rows.
 2. In Excel on the web, go to **Automate > New script**, paste `asset_audit_officescript.ts`, and run it.
-3. Start with **Start Here**, then **Executive Summary** and **Quality Checks**.
-4. **Monthly Email** has the monthly email ready to copy into Outlook, and a prompt for Copilot in PowerPoint
-   (open a new presentation from the VOIS template first) that builds the slides from the same numbers.
+3. The workbook gets only the monthly report tabs: **Monthly Email** (the email ready to copy into Outlook, and a
+   prompt for Copilot in PowerPoint), **Pivot & Summary**, **New Assets**, **Removed Assets** (when any),
+   **Serial Number Changes**, **Scrap & Inactive Assets**, **POs Validated** and **Stock & Utilisation**.
+   For the full audit tabs, set `REPORT_ONLY = false` near the top of the sheet-building code.
 
 ## Test locally
 

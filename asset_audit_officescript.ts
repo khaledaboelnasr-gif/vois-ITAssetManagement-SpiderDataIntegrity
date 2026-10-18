@@ -231,7 +231,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.14.13";
+const SCRIPT_VERSION = "2026.10.18.1";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -1643,6 +1643,22 @@ function typeRows(rc: Recon, group: string, maps: Mappings): [string, number, nu
 }
 // One line per PO for the email: what the PO contains (user-supplied), what is already on Spider (new assets with that
 // PO), and what is still pending. Supplied models are matched to asset types ("Bags" = Bag, "Mouses" / "Mice" = Mouse).
+// Stock utilization for the email: in use vs in stock per asset type (standard order), deployments this month and
+// months of stock at that pace. Utilization = in use / (in use + in stock).
+function stockLines(ctx: Ctx): string[] {
+  const rows = utilisationRows(ctx, ctx.assets, a => [a.assetClass]);
+  const order = VCAMS_TYPES.map(t => t[0]);
+  rows.sort((a, b) => (order.indexOf(String(a[0])) < 0 ? 99 : order.indexOf(String(a[0]))) - (order.indexOf(String(b[0])) < 0 ? 99 : order.indexOf(String(b[0]))));
+  const use = rows.reduce((s, r) => s + (r[1] as number), 0), stock = rows.reduce((s, r) => s + (r[2] as number), 0);
+  const pctText = (u: number, st: number) => u + st ? (100 * u / (u + st)).toFixed(1) + "%" : "-";
+  const out = [`• Overall: ${fmtNum(use)} in use, ${fmtNum(stock)} in stock - ${pctText(use, stock)} utilized`];
+  rows.forEach(r => {
+    const t = String(r[0]), u = r[1] as number, st = r[2] as number, pm = r[10] as number, cover = r[11];
+    out.push(`      o ${/s$|-/i.test(t) ? t : t + "s"}: ${fmtNum(u)} in use, ${fmtNum(st)} in stock - ${pctText(u, st)} utilized` +
+      (ctx.recon.available ? `; ${fmtNum(pm)} deployed this month` + (cover !== "" ? `, stock covers about ${(cover as number).toFixed(1)} months` : "") : ""));
+  });
+  return out;
+}
 // The Spider comments of an asset for the email: the status comment first, then the general comment if it differs
 function spiderComment(a: Asset): string {
   const sc = a.statusComment.trim(), c = a.comment.trim();
@@ -1793,6 +1809,9 @@ function monthlyReport(ctx: Ctx): MonthlyReport {
     });
   });
   line("");
+  head("5. Stock utilization:");
+  stockLines(ctx).forEach(t => line(t));
+  line("");
   line("Best regards,");
 
   // The model column of an unsupplied PO lists models with counts, e.g. "Bag (50)": the counts are dropped here
@@ -1817,7 +1836,7 @@ function monthlyReport(ctx: Ctx): MonthlyReport {
       `blank PurchaseNo ${fmtNum(blankPo)}` : "no new assets") +
     (rc.operational.length ? `; scrapped or lost by type ${top(countBy(rc.operational.map(c => c.cur.assetClass)), 3)}` : "") +
     (rc.serialChecked && rc.serialChanges.length ? `; serials ${top(countBy(rc.serialChanges.map(c => serialShort(c.change))), 3)}` : "") +
-    (rc.removed.length ? "; removed assets are to be reviewed, not treated as scrapped" : "") + ".");
+    (rc.removed.length ? "; removed assets are to be reviewed, not treated as scrapped" : "") + `; ${stockLines(ctx)[0].replace("• Overall: ", "stock: ")}.`);
   ppt.push("Slide 3, PO validation and points for review: a small table with columns PO, Model, In export, Supplied, Variance, Result: " +
     (po.length ? po.slice(0, 4).map(r => `${r[0] || "Blank PurchaseNo"}, ${model(r) || "-"}, ${fmtNum(r[2] as number)}, ` +
       `${r[3] === "" ? "-" : fmtNum(r[3] as number)}, ${r[4] === "" ? "-" : signed(r[4] as number)}, ${r[7]}`).join("; ") +
@@ -2287,6 +2306,11 @@ function buildFindings(ctx: Ctx): Finding[] {
 
 // ============================================================================ workbook output
 const BRAND = "#E60000", DARK = "#333333", GREY = "#595959";
+// REPORT_ONLY: the workbook holds only what the team sends every month (the reconciliation tabs and the email), plus
+// Stock & Utilisation. false = the full audit (integrity score, exceptions, leavers, lifecycle, ...).
+const REPORT_ONLY = true;
+const REPORT_SHEETS = ["Monthly Email", "Pivot & Summary", "New Assets", "Removed Assets", "Serial Number Changes",
+  "Scrap & Inactive Assets", "POs Validated", "Stock & Utilisation"];
 const SHEETS = ["Start Here", "Monthly Email", "Executive Summary", "Monthly KPIs", "Pivot & Summary", "New Assets", "Removed Assets",
   "Serial Number Changes", "Scrap & Inactive Assets", "POs Validated", "Quality Checks", "Integrity Score", "Exceptions", "Duplicates",
   "Users & Leavers", "Reconciliation", "Stock & Utilisation", "Lifecycle", "Since Last Audit", "Inventory Overview",
@@ -2397,6 +2421,48 @@ const ASSET_HEADER = ["Asset", "Market", "Asset Type", "VCAMS Status", "Stage", 
   "Assigned User", "User Email", "Location", "Managed By"];
 const ASSET_WIDTHS = [110, 110, 90, 90, 80, 110, 90, 100, 130, 130, 170, 120, 110];
 
+// Stock & Utilisation: in use vs in stock, stock age, deployments, months of cover, by market, type, site and model
+function buildStockSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
+  progress("Writing Stock & Utilisation");
+  const assets = ctx.assets, date = fmtDay(ctx.asOf);
+  const ws = newSheet(wb, "Stock & Utilisation", "Stock & Utilisation - " + date, `Utilisation = in use / (in use + in stock). ` +
+    `Stock age from ${ctx.stockAgeSource || "(not available)"}; deployments from ${ctx.deploySource || "(not available)"}. ` +
+    `Cover = in stock / deployments per month.`);
+  const utilHeader = (g: string[]) => g.concat(UTIL_COLS);
+  const utilOpts = (n: number): TableOpts => ({ widths: new Array<number>(n).fill(130).concat([65, 65, 75, 60, 60, 60, 60, 70, 70, 75, 75, 70, 80, 330]),
+    pct: [n + 2], num: [n + 9, n + 10], count: [n, n + 1], bars: [n + 1], wrap: [n + 13] });
+  let r = sectionTitle(ws, 3, "By market and asset type");
+  r = addTable(ws, r, "UtilType", utilHeader(["Market", "Asset Type"]), utilisationRows(ctx, assets, a => [a.market, a.assetClass]), utilOpts(2));
+  if (ctx.cols.has("location")) {
+    r = sectionTitle(ws, r, "Move stock before buying", "Sites with a shortage and the site in the same market with the most surplus of that type");
+    r = addTable(ws, r, "Moves", ["Market", "Asset Type", "Site Short of Stock", "Its Stock", "Its Deployments / Month", "Units Needed (1 month)",
+      "Site with Surplus", "Surplus Stock", "Suggestion"], moveSuggestions(ctx), { widths: [120, 100, 180, 65, 85, 85, 180, 70, 300], wrap: [8] });
+    r = sectionTitle(ws, r, "By site and asset type (most stock first)");
+    r = addTable(ws, r, "UtilSite", utilHeader(["Market", "Site", "Asset Type"]), utilisationRows(ctx, assets, a => [a.market, a.location || "(no location)", a.assetClass]).slice(0, 300), utilOpts(3));
+  }
+  r = sectionTitle(ws, r, "In-stock models (most stock first)", "Deploy the oldest units first; dispose units beyond their life");
+  const inUseByModel = groupBy(assets.filter(a => a.stage === IN_USE), a => a.market + "\u0001" + a.model);
+  const stockModels: Cell[][] = Array.from(groupBy(assets.filter(a => a.stage === STOCK), a => [a.market, a.assetClass, a.model || "(no model)"].join("\u0001")).entries())
+    .map(e => {
+      const [market, cls, model] = e[0].split("\u0001"), list = e[1];
+      const deployed = deployRate(inUseByModel.get(market + "\u0001" + list[0].model) || [], ctx);
+      const ages = list.map(a => stockAge(a, ctx)).filter(x => x >= 0);
+      return [market, cls, model, list.length, ages.length ? ages.reduce((m, x) => Math.max(m, x), 0) : "", list.filter(a => stockAge(a, ctx) > SETTINGS.stockAgedDays).length,
+        list.filter(a => hasFlag(a, "STOCK_OVER_AGE")).length, Math.round(deployed * 10) / 10, coverMonths(list.length, deployed),
+        Array.from(new Set<string>(list.map(a => a.location || "(no location)"))).slice(0, 5).join(", "), stockVerdict(list.length, deployed,
+          list.filter(a => stockAge(a, ctx) > SETTINGS.stockAgedDays).length, ctx)] as Cell[];
+    }).sort((a, b) => (b[3] as number) - (a[3] as number)).slice(0, 300);
+  r = addTable(ws, r, "StockModels", ["Market", "Asset Type", "Model", "In Stock", "Oldest (days)", "Aged", "Beyond Life", "Same Model Deployed / Month",
+    "Months of Cover", "Sites", "What It Means"], stockModels, { widths: [120, 100, 200, 65, 75, 60, 70, 90, 75, 260, 330], num: [7, 8], wrap: [9, 10] });
+  r = sectionTitle(ws, r, "Stock by status detail", "In repair and in transit are not available stock");
+  addTable(ws, r, "StockStages", ["Market", "In Stock", "In Repair", "On Order / In Transit", `In Repair > ${SETTINGS.repairMaxDays}d`, `On Order / Transit > ${SETTINGS.transitMaxDays}d`],
+    ctx.markets.map(m => {
+      const ms = assets.filter(a => a.market === m);
+      return [m, ms.filter(a => a.stage === STOCK).length, ms.filter(a => a.stage === REPAIR).length, ms.filter(a => a.stage === TRANSIT).length,
+        ms.filter(a => hasFlag(a, "LONG_IN_REPAIR")).length, ms.filter(a => hasFlag(a, "LONG_IN_TRANSIT")).length];
+    }), { widths: [150, 70, 70, 70, 90, 90] });
+}
+
 function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
   TABLES.n = 0;
   const assets = ctx.assets, scope = assets.filter(a => inScope(a)), date = fmtDay(ctx.asOf);
@@ -2420,6 +2486,15 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
       addTable(ws0, 3, "tblPOValidated", PO_HEADERS, ctx.po.rows.map(p => [p.date, p.number, p.model, p.quantity, p.raisedBy, p.physical, p.spider]),
         { widths: [110, 150, 150, 90, 130, 150, 130], text: [1], date: [0], count: [3] });
     }
+  }
+  if (REPORT_ONLY) {
+    buildStockSheet(wb, ctx);
+    // Tabs that earlier (full audit) runs added are removed; the export tabs and Mappings stay
+    SHEETS.filter(n => REPORT_SHEETS.indexOf(n) < 0).forEach(n => { const w = wb.getWorksheet(n); if (w) { w.delete(); } });
+    REPORT_SHEETS.forEach((name, i) => { const w = wb.getWorksheet(name); if (w) { w.setPosition(i); } });
+    const first = wb.getWorksheet(ctx.recon.available ? EMAIL_SHEET : "Stock & Utilisation");
+    if (first) { first.activate(); }
+    return;
   }
 
   // --- 1 Start Here
@@ -2608,43 +2683,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
     .sort((a, b) => (a[3] === "" ? 1e9 : a[3] as number) - (b[3] === "" ? 1e9 : b[3] as number)).slice(0, 20000), { widths: [150, 140, 90, 70, 220, 120] });
 
   // --- 9 Stock & Utilisation
-  progress("Writing Stock & Utilisation");
-  ws = newSheet(wb, "Stock & Utilisation", "Stock & Utilisation - " + date, `Utilisation = in use / (in use + in stock). ` +
-    `Stock age from ${ctx.stockAgeSource || "(not available)"}; deployments from ${ctx.deploySource || "(not available)"}. ` +
-    `Cover = in stock / deployments per month.`);
-  const utilHeader = (g: string[]) => g.concat(UTIL_COLS);
-  const utilOpts = (n: number): TableOpts => ({ widths: new Array<number>(n).fill(130).concat([65, 65, 75, 60, 60, 60, 60, 70, 70, 75, 75, 70, 80, 330]),
-    pct: [n + 2], num: [n + 9, n + 10], count: [n, n + 1], bars: [n + 1], wrap: [n + 13] });
-  r = sectionTitle(ws, 3, "By market and asset type");
-  r = addTable(ws, r, "UtilType", utilHeader(["Market", "Asset Type"]), utilisationRows(ctx, assets, a => [a.market, a.assetClass]), utilOpts(2));
-  if (ctx.cols.has("location")) {
-    r = sectionTitle(ws, r, "Move stock before buying", "Sites with a shortage and the site in the same market with the most surplus of that type");
-    r = addTable(ws, r, "Moves", ["Market", "Asset Type", "Site Short of Stock", "Its Stock", "Its Deployments / Month", "Units Needed (1 month)",
-      "Site with Surplus", "Surplus Stock", "Suggestion"], moveSuggestions(ctx), { widths: [120, 100, 180, 65, 85, 85, 180, 70, 300], wrap: [8] });
-    r = sectionTitle(ws, r, "By site and asset type (most stock first)");
-    r = addTable(ws, r, "UtilSite", utilHeader(["Market", "Site", "Asset Type"]), utilisationRows(ctx, assets, a => [a.market, a.location || "(no location)", a.assetClass]).slice(0, 300), utilOpts(3));
-  }
-  r = sectionTitle(ws, r, "In-stock models (most stock first)", "Deploy the oldest units first; dispose units beyond their life");
-  const inUseByModel = groupBy(assets.filter(a => a.stage === IN_USE), a => a.market + "\u0001" + a.model);
-  const stockModels: Cell[][] = Array.from(groupBy(assets.filter(a => a.stage === STOCK), a => [a.market, a.assetClass, a.model || "(no model)"].join("\u0001")).entries())
-    .map(e => {
-      const [market, cls, model] = e[0].split("\u0001"), list = e[1];
-      const deployed = deployRate(inUseByModel.get(market + "\u0001" + list[0].model) || [], ctx);
-      const ages = list.map(a => stockAge(a, ctx)).filter(x => x >= 0);
-      return [market, cls, model, list.length, ages.length ? ages.reduce((m, x) => Math.max(m, x), 0) : "", list.filter(a => stockAge(a, ctx) > SETTINGS.stockAgedDays).length,
-        list.filter(a => hasFlag(a, "STOCK_OVER_AGE")).length, Math.round(deployed * 10) / 10, coverMonths(list.length, deployed),
-        Array.from(new Set<string>(list.map(a => a.location || "(no location)"))).slice(0, 5).join(", "), stockVerdict(list.length, deployed,
-          list.filter(a => stockAge(a, ctx) > SETTINGS.stockAgedDays).length, ctx)] as Cell[];
-    }).sort((a, b) => (b[3] as number) - (a[3] as number)).slice(0, 300);
-  r = addTable(ws, r, "StockModels", ["Market", "Asset Type", "Model", "In Stock", "Oldest (days)", "Aged", "Beyond Life", "Same Model Deployed / Month",
-    "Months of Cover", "Sites", "What It Means"], stockModels, { widths: [120, 100, 200, 65, 75, 60, 70, 90, 75, 260, 330], num: [7, 8], wrap: [9, 10] });
-  r = sectionTitle(ws, r, "Stock by status detail", "In repair and in transit are not available stock");
-  addTable(ws, r, "StockStages", ["Market", "In Stock", "In Repair", "On Order / In Transit", `In Repair > ${SETTINGS.repairMaxDays}d`, `On Order / Transit > ${SETTINGS.transitMaxDays}d`],
-    ctx.markets.map(m => {
-      const ms = assets.filter(a => a.market === m);
-      return [m, ms.filter(a => a.stage === STOCK).length, ms.filter(a => a.stage === REPAIR).length, ms.filter(a => a.stage === TRANSIT).length,
-        ms.filter(a => hasFlag(a, "LONG_IN_REPAIR")).length, ms.filter(a => hasFlag(a, "LONG_IN_TRANSIT")).length];
-    }), { widths: [150, 70, 70, 70, 90, 90] });
+  buildStockSheet(wb, ctx);
 
   // --- 10 Lifecycle
   progress("Writing Lifecycle");
@@ -3027,7 +3066,8 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
   pivot("StatusChangesPivot", "tblStatusChanges", rc.operational.length, "K4", ["Current Asset Status", "Asset Type", "Model"], "Asset no.", false);
   pivot("POValidationsPivot", "tblPOValidated", ctx.po.rows.length, "O4", ["Purchase Number", "Model"], "Quantity", true);
 
-  // --- Quality Checks
+  // --- Quality Checks (full audit only; the results are also in the flow result)
+  if (REPORT_ONLY) { return notes; }
   progress("Writing Quality Checks");
   ws = newSheet(wb, "Quality Checks", `Quality Checks - ${curName}`, "Every control must pass (or be reviewed) before the monthly report is final");
   r = addTable(ws, 3, "tblQualityChecks", ["Check", "Expected", "Actual", "Result"], qualityChecks(ctx), { widths: [480, 110, 110, 80] });
