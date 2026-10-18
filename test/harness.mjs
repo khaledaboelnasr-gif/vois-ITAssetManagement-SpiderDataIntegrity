@@ -122,7 +122,8 @@ const wb = { sheets: Object.keys(data).filter(n => !drop(n)).map(n => wrap(new S
     const ws = this.sheets.find(s => s.tableRanges.some(t => t.name.toLowerCase() === String(n).toLowerCase()));
     const t = ws.tableRanges.find(x => x.name.toLowerCase() === String(n).toLowerCase());
     return wrap({ getName: () => n, getRowCount: () => t.h - 1, getHeaderRowRange: () => ws.getRangeByIndexes(t.r, t.c, 1, t.w),
-      getRangeBetweenHeaderAndTotal: () => ws.getRangeByIndexes(t.r + 1, t.c, t.h - 1, t.w) });
+      getRangeBetweenHeaderAndTotal: () => ws.getRangeByIndexes(t.r + 1, t.c, t.h - 1, t.w),
+      getRange: () => ws.getRangeByIndexes(t.r, t.c, t.h, t.w) });
   },
   addWorksheet(n) { if (this.getWorksheet(n)) throw new Error("dup sheet " + n); const s = wrap(new Sheet(n)); this.sheets.push(s); return s; } };
 // REFJSON=1: compact JSON like reference_extract_officescript.ts produces

@@ -231,7 +231,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.18.16";
+const SCRIPT_VERSION = "2026.10.18.17";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -2688,13 +2688,26 @@ function deployPeriod(ctx: Ctx): string {
   return ctx.recon.available ? ctx.recon.curPeriod : ctx.period;
 }
 // Table 7 as it was before this run (the user may also have typed earlier months into it)
+// or, in a new workbook, rows pasted (with their header) onto a tab named "Deployment History"
+const DEPLOY_HIST_SHEET = "Deployment History";
 function readDeployHistory(wb: ExcelScript.Workbook): [string, string, number, number][] {
   const t = wb.getTable(DEPLOY_HIST_TABLE);
-  if (!t || !t.getRowCount()) { return []; }
-  const head = (t.getHeaderRowRange().getValues()[0] as Raw[]).map(v => String(v));
+  let grid: Raw[][] = [];
+  if (t && t.getRowCount()) {
+    grid = (t.getRange().getValues() as Raw[][]);
+  } else {
+    const ws = wb.getWorksheet(DEPLOY_HIST_SHEET);
+    if (ws) {
+      const used = ws.getUsedRange();
+      if (used) { grid = used.getValues() as Raw[][]; }
+    }
+  }
+  const hr = grid.findIndex(r => r.some(v => String(v).trim() === "Month") && r.some(v => String(v).trim() === "Deployed from Stock"));
+  if (hr < 0) { return []; }
+  const head = grid[hr].map(v => String(v).trim());
   const col = (h: string) => head.indexOf(h);
   const num = (v: Raw) => typeof v === "number" ? v : Number(String(v).replace(/,/g, "")) || 0;
-  return (t.getRangeBetweenHeaderAndTotal().getValues() as Raw[][]).map(r => {
+  return grid.slice(hr + 1).map(r => {
     const m = r[col("Month")], d = typeof m === "number" ? new Date(Date.UTC(1899, 11, 30) + Math.round(m) * 86400000) : null;
     const period = d ? `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}` : (String(m).match(/^\s*(\d{4})-(\d{1,2})/) || []).slice(1)
       .map((x, i) => i ? x.padStart(2, "0") : x).join("-");
@@ -2782,7 +2795,8 @@ function buildStockSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
   const hist = ctx.deployHist.filter(h => !(monthly && h[0] === now)).concat(monthly ? sum.map(x => [now, x.label.trim(), x.fromStock, x.newDirect] as
     [string, string, number, number]) : []).sort((x, y) => y[0].localeCompare(x[0]) || labels.indexOf(x[1]) - labels.indexOf(y[1])).slice(0, 36 * 5);
   r = sectionTitle(ws, r, "7. Deployment history (for the average)", "Each run adds this month. Keep this tab when you start next " +
-    "month's workbook, or type earlier months here (Month as YYYY-MM, Category as in table 1) - the next run uses them.");
+    "month's workbook, or paste these rows (with the header) on a tab named 'Deployment History' in the new workbook. Earlier months " +
+    "can be typed in (Month as YYYY-MM, Category as in table 1).");
   addTable(ws, r, DEPLOY_HIST_TABLE, ["Month", "Category", "Deployed from Stock", "New Straight to Use"], hist.map(h => [h[0], h[1], h[2], h[3]]),
     { widths: [], text: [0], count: [2, 3], blankRow: true });
 }
@@ -2931,7 +2945,8 @@ function buildGuideSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
     ["5. Not counted - summary", "Everything left out of the utilization, by reason (Function Unit or status), category, status and model.", "So nothing disappears silently."],
     ["6. Not counted - assets", "Every left-out asset, Function Units first.", "Asset no., reason, Function Unit, type, model, status, serial, last scan, comment."],
     ["7. Deployment history", "Per month and category: deployed from stock and new straight to use.", "Each run adds or replaces its month and " +
-      "keeps the rest. Keep the tab when you start next month's workbook (or type earlier months as YYYY-MM): the average needs it. Until then " +
+      "keeps the rest. Same workbook next month: nothing to do. New workbook: paste these rows with the header on a tab named 'Deployment History'. " +
+      "Earlier months can be typed in (YYYY-MM). Until then " +
       "the cover uses this month only ('Months in Average' says how many months were used)."]]);
   sub("Statuses and how they count for stock", ["Status", "Stage", "Stock utilization", "On Scrap & Inactive Assets"], VCAMS_STATUSES.map(x => {
     const own = ctx.maps.stockStatus.get(compactKey(x[0]));
