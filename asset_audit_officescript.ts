@@ -231,7 +231,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.18.14";
+const SCRIPT_VERSION = "2026.10.18.15";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -1899,11 +1899,13 @@ function monthlyReport(ctx: Ctx): MonthlyReport {
     return keys.slice(0, n).map(k => [k, m.get(k) || 0] as Cell[]).concat(rest ? [["Other", rest]] : []);
   };
   const slides: Slide[] = [];
-  slides.push({ name: "Overview", title: `${fmtNum(rc.curRows)} assets in ${curName}, ${signed(net)} vs ${prevName}`,
-    kpis: [[`Assets ${curName}`, fmtNum(rc.curRows)], [`Change vs ${prevName}`, signed(net)], ["New assets", fmtNum(rc.newAssets.length)],
+  // Slide titles and cards use the month without the year (the title slide has it), to keep the prompt short
+  const curM = curName.split(" ")[0], prevM = prevName.split(" ")[0];
+  slides.push({ name: "Overview", title: `${fmtNum(rc.curRows)} assets in ${curM}, ${signed(net)} vs ${prevM}`,
+    kpis: [[`Assets ${curM}`, fmtNum(rc.curRows)], [`vs ${prevM}`, signed(net)], ["New assets", fmtNum(rc.newAssets.length)],
       ["Removed (to review)", fmtNum(rc.removed.length)]],
     bullets: [biggest ? `Biggest change: ${biggest[0]} ${signed(+biggest[1])}` : "No change by asset type",
-      `${fmtNum(ops)} assets moved to Scrapped, Inactive, Lost or Stolen`,
+      `${fmtNum(ops)} assets scrapped, inactive or lost`,
       rc.serialChecked ? `${fmtNum(rc.serialChanges.length)} serial number changes` : ""].filter(t => t),
     charts: [{ title: "Assets by value group", kind: "column", header: ["Value group", prevName, curName],
       rows: groups.map(x => [x.g, x.p, x.c] as Cell[]), colors: ["#A6A6A6", BRAND] }] });
@@ -1912,7 +1914,6 @@ function monthlyReport(ctx: Ctx): MonthlyReport {
     kpis: [["New assets", fmtNum(rc.newAssets.length)], ["POs matched", `${matched} / ${po.length}`], ["PO validations open", fmtNum(open.length)],
       ["No PurchaseNo", fmtNum(blankPo)]],
     bullets: [rc.newAssets.length ? `New: ${countText(countBy(rc.newAssets.map(a => plural(a.assetClass))), 3)}` : "No new assets",
-      open.length ? `PO validations to complete: ${open.length}` : "All PO validations complete",
       blankPo ? `${fmtNum(blankPo)} new assets need a PurchaseNo on Spider` : ""].filter(t => t),
     charts: [{ title: "New assets by type", kind: "bar", header: ["Asset type", "New assets"],
       rows: topRows(countBy(rc.newAssets.map(a => a.assetClass)), 6), colors: [BRAND] },
@@ -1928,7 +1929,7 @@ function monthlyReport(ctx: Ctx): MonthlyReport {
       ["Lost / stolen", fmtNum(groupsByStatus[2][1].length + groupsByStatus[3][1].length)],
       ["Validation done", toCheck.length ? `${fmtNum(checked)} / ${fmtNum(toCheck.length)}` : "-"]],
     bullets: [ops ? `Main reasons: ${reasonTop}` : "No status changes to report",
-      toCheck.length > checked ? `${fmtNum(toCheck.length - checked)} notebooks, monitors and accessories still to validate` : ""].filter(t => t),
+      toCheck.length > checked ? `${fmtNum(toCheck.length - checked)} notebooks / monitors / accessories to validate` : ""].filter(t => t),
     charts: [{ title: "Status changes by asset type", kind: "stacked", header: ["Asset type"].concat(statusCols.map(g => g[0])),
       rows: typeStatus.slice(0, 6).map(t => statusRow(x => x === t, t)).concat(typeStatus.length > 6 ?
         [statusRow(x => typeStatus.indexOf(x) >= 6, "Other")] : []),
@@ -1946,20 +1947,20 @@ function monthlyReport(ctx: Ctx): MonthlyReport {
   slides.push({ name: "Stock utilization and next steps", title: `Utilization: notebooks ${pctOf(st[0])}, headsets ${pctOf(st[1])}`,
     kpis: [["Notebooks", pctOf(st[0])], ["Wired headsets", pctOf(st[2])], ["Wireless headsets", pctOf(st[3])],
       ["Notebooks in stock", fmtNum(st[0].stock)]],
-    bullets: [withUser ? `In use includes ${fmtNum(withUser)} inactive / disabled notebooks still with users` :
+    bullets: [withUser ? `${fmtNum(withUser)} inactive / disabled notebooks with users count as in use` :
       `${fmtNum(st[0].use)} notebooks in use, ${fmtNum(st[0].stock)} in stock`,
       outFu ? `Not counted: ${fmtNum(outFu)} in scrap warehouse / unreturned` : ""].filter(t => t)
-      .concat(next.length ? [`Next: ${next.slice(0, 2).join("; ")}`] : []),
+      .concat(next.length ? [`Next: ${next[0]}`] : []),
     charts: [{ title: "Utilization: in use vs in stock", kind: "stacked100", header: ["Category", "In use", "In stock"],
       rows: [st[0], st[2], st[3]].concat(st.slice(4)).map(x => [x.label.trim(), x.use, x.stock] as Cell[]), colors: [BRAND, "#BFBFBF"] }] });
 
   // Copilot in PowerPoint: one prompt, one row per slide (Microsoft: start from the template, give the exact content and
   // layout per slide). Charts are pasted from the PPT Slides tab into the "[Paste chart]" boxes afterwards.
   const ppt: string[] = [];
-  ppt.push("Using this VOIS template (its layouts, colours, fonts), create a title slide and exactly the 4 slides below; no agenda " +
-    "or closing slide. Audience: IT leadership. Use titles and numbers exactly as written. Slides 1-4 layout: under the title a row " +
-    "of 4 KPI cards (big number, small label below); below, bullets on the left half and, on the right half, one empty box " +
-    "per [Chart] text, for charts I paste later.");
+  ppt.push("Using this VOIS template, create a title slide and exactly the 4 slides below; no agenda or closing slide. Slides 1-4 " +
+    "all use the same light title-only layout. Use titles and numbers exactly as written. Each slide: under the title, 4 KPI " +
+    "cards as rounded shapes (big number, small label, no bullet points); below them, bullets on the left and, on the right, " +
+    "one empty box per [Chart] text, for charts I paste later.");
   ppt.push(`Title slide: "VCAMS Asset Reconciliation - ${curName}". Subtitle: "Spider data integrity, ${prevName} to ${curName}".`);
   slides.forEach((s, i) => ppt.push(`Slide ${i + 1}: "${s.title}". Cards: ` + s.kpis.map(k => `${k[1]} ${k[0]}`).join(" | ") +
     ". Bullets: " + s.bullets.join("; ") + ". Box: " + s.charts.filter(c => c.rows.length).map(c => `[Chart: ${c.title}]`).join(" ") + "."));

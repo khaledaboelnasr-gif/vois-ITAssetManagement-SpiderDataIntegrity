@@ -105,6 +105,8 @@ The spec is the "Monthly Asset Reconciliation Copilot Agent" instructions, writt
   bullets, chart data, charts), and the Copilot prompt builds a title slide + 4 slides (Overview; New assets and POs;
   Scrapped, inactive and lost; Stock utilization and next steps) with the message as the title, 4 KPI cards, bullets and
   an empty [Chart] box per chart. The user pastes the charts into the boxes. Prompt kept under 2,000 characters.
+  v15 (after a test deck): same light layout on every slide, KPI cards as shapes without bullet points, month
+  names without the year on slides 1-4, fewer repeated bullets (prompt ~1,800 characters).
 - **Email 2.1** lists, under each PO, its models on Spider (type - model: count) and the PO lines not on Spider yet.
 
 - **Stock utilisation = Notebooks and Headsets only (user decision, 2026-10-18).** Headsets = type "Headset" plus
