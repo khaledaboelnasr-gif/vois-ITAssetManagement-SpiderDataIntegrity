@@ -61,10 +61,15 @@ The spec is the "Monthly Asset Reconciliation Copilot Agent" instructions, writt
 
 ## Key decisions
 
-- **Glossary (2026-10-18).** The report now ends with a Glossary tab ("how everything works"): 1 the monthly routine,
-  2 every tab (what it shows, how it is made, what you can change; tab names link to the tabs), 3 how each number is
-  worked out, 4 statuses (stage, how they count for stock, whether they go on Scrap & Inactive Assets), 5 change reasons
-  and the words they look for, 6 PO results, 7 asset types and value groups, 8 every Mappings Kind with an example.
+- **Glossary (2026-10-18, per tab).** The report ends with a Glossary tab: the monthly routine, then one section per tab
+  in tab order (Part | What you see | How it works, with a link to the tab), and each tab's reference table under it:
+  value groups (Pivot & Summary), change reasons (Scrap & Inactive Assets), PO results (POs Validated), statuses and how
+  they count (Stock & Utilisation), every Mappings Kind (Mappings).
+- **Headsets (2026-10-18):** wired / wireless checked against the team's model list (Evolve2 55 and Yealink BH72 wireless;
+  Supra Plus and EPOS PC wired; Meta Quest = VR headset, shown separately). Plantronics Standard and TB310MKII+ stay
+  "Not sure" until a Mappings Headset row says otherwise.
+- **Stock "not counted" (2026-10-18):** Stock tables 5-6 and the email list everything left out: excluded Function Units
+  and every left-out status, per category, status and model.
   It is written from the script's own rules and lists, so it changes when they change. An empty Mappings tab is added
   when there is none.
 
