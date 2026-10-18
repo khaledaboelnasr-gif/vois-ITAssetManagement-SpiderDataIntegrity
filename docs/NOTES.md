@@ -100,6 +100,11 @@ The spec is the "Monthly Asset Reconciliation Copilot Agent" instructions, writt
   Reserved counts as stock. Function Units "VOIS_EG Scrape Warehouse" and "VOIS_EG Unreturned Devices" are left out by
   default (user decision, 2026-10-18) and reported on the Stock tab (5: summary by unit, category, status, model; 6: every
   asset) and in the email's section 5.
+- **Months of cover (user decision, 2026-10-18, v16):** cover = in stock / average **deployed from stock** per month.
+  Deployed from stock = In stock (or Reserved, ...) last month, In operation now. New assets already In operation are
+  shown as "New straight to use" but are not in the cover (they never came out of stock). Average = this month plus up
+  to 2 earlier months from the Stock tab's table 7 (Deployment history), which each run updates and keeps; the user can
+  type earlier months (YYYY-MM). The export has no assignment date, so history is the only source for the average.
 - **PowerPoint (2026-10-18, v14):** Copilot did not give a presentable deck from numbers alone, so the work is split:
   the **PPT Slides** tab draws the charts as real Excel charts in VOIS colours (one block per slide: title, 4 KPI cards,
   bullets, chart data, charts), and the Copilot prompt builds a title slide + 4 slides (Overview; New assets and POs;

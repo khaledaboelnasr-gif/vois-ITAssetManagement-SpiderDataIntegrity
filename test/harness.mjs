@@ -5,6 +5,7 @@
 //      ONLYCUR=1 (drop the previous export)  SNAPSHOT=1 (previous month as a snapshot from an earlier run, not a tab)
 //      NOPO=1 (drop the PO tab)  POJSON=1 (pass the PO rows as poJson)  MARK=1 (fill the Physical Check sheet and re-run)
 //      HISTOUT=<file> (save historyRows)  BRIEFOUT=<file> (save agentInput)  REPORTOUT=<file> (save the email and PowerPoint prompt)  MAXCALLS=<n> (fail above n Excel calls)
+//      DEPLOYFILL=1 (type earlier months into the stock deployment history; the re-run must average them)
 //      TABNAMES=1 (tabs named "previous month export" / "this month export")
 import { stripTypeScriptTypes } from "node:module";
 import fs from "node:fs";
@@ -193,6 +194,11 @@ if (process.env.SCRAPFILL) {
   }
   console.log("SCRAPFILL: validated", scrapFilled);
 }
+// DEPLOYFILL=1: type two earlier months into the deployment history (table 7) as a user would; the re-run must average them
+if (process.env.DEPLOYFILL) {
+  const ss = wb.getWorksheet("Stock & Utilisation"), t = ss.tableRanges.find(x => x.name === "tblStockDeployHistory");
+  [["2026-09", "Notebooks", 13, 2], ["2026-08", "Notebooks", 10, 0]].forEach((v, i) => v.forEach((x, j) => ss.cells.set(`${t.r + 1 + i},${t.c + j}`, x)));
+}
 if (process.env.SHARE !== "1" && !process.env.NORERUN) { // re-running on the same workbook must work (our sheets are skipped)
   const res2 = run();
   console.log("RERUN ok | assets", res2.assets, "| score", res2.integrityScore);
@@ -207,6 +213,15 @@ if (process.env.SHARE !== "1" && !process.env.NORERUN) { // re-running on the sa
     const ss = wb.getWorksheet("Scrap & Inactive Assets"); assert.ok([...ss.cells.values()].includes("Checked on site"), "the note is still on the tab");
   }
   if (process.env.POFILL) assert.ok(!res2.reconciliation.some(l => /Pending/.test(l)), "edits on POs Validated win over the PO tab");
+  if (process.env.DEPLOYFILL) {
+    const line = res2.emailBody.split("\n").find(l => l.startsWith("• Notebooks"));
+    console.log("DEPLOYFILL:", line.replace(/.*; stock/, "stock"));
+    assert.ok(/3-month average/.test(line), "the typed months are averaged");
+    const ss = wb.getWorksheet("Stock & Utilisation"), t = ss.tableRanges.find(x => x.name === "tblStockDeployHistory");
+    const months = []; for (let i = 1; i < t.h; i++) months.push(ss.cells.get(`${t.r + i},${t.c}`) + "|" + ss.cells.get(`${t.r + i},${t.c + 1}`));
+    assert.equal(new Set(months).size, months.length, "each month and category once");
+    assert.ok(months.includes("2026-09|Notebooks") && months.includes("2026-10|Notebooks"), "earlier months kept, this month added");
+  }
   if (process.env.MARK) console.log("physical:", res2.runInfo.length, (res2.agentInput.match(/## 11\. Physical check\n(.*)/) || [])[1]);
 }
 const dump = (name, maxR, maxLen = 70) => { const w = wb.getWorksheet(name); console.log("=== " + name); if (!w) return;

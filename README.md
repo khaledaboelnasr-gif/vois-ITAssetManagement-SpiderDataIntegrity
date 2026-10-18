@@ -97,6 +97,7 @@ RENDER=preview NORERUN=1 node harness.mjs ../asset_audit_officescript.ts synthet
 | `MARKET="VOIS EG"` | Filters the run to one market. |
 | `MAPPINGS=<json>` | Passes custom mappings. |
 | `MARK=1` | Fills the Physical Check sample and re-runs. |
+| `DEPLOYFILL=1` | Types two earlier months into the stock deployment history; the re-run must average them. |
 | `HISTOUT=<file>` | Saves `historyRows` to a file. |
 | `NORERUN=1` | Skips the re-run on the same workbook. |
 | `MAXCALLS=<n>` | Fails if the run makes more than n Excel calls (an Excel call inside a per-row loop). |

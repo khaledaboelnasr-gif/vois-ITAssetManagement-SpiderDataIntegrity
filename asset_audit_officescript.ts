@@ -105,7 +105,7 @@ function runAudit(workbook: ExcelScript.Workbook, auditDate?: string, previousDa
     stockAgeSource: cur.cols.has("statusDate") ? "status date" : cur.cols.has("updated") ? "asset update date (approximate)" :
       cur.cols.has("purchase") ? "purchase date (no status date column)" : "",
     deploySource: "", recon: emptyRecon(), po: loadPo(workbook, tabs.po, tabs.ownPo, poJson), formulas: !shareSafe && !marketFilter,
-    curTabs: cur.tabs, prevTabs: prevLoad ? prevLoad.tabs : [], tokens: []
+    curTabs: cur.tabs, prevTabs: prevLoad ? prevLoad.tabs : [], tokens: [], deployHist: []
   };
   if (prevAssets) {
     ctx.recon = reconcile(ctx, cur, prevLoad, prevAssets, assets, prevLoad ? "previous export tab " +
@@ -231,7 +231,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.18.15";
+const SCRIPT_VERSION = "2026.10.18.16";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -562,6 +562,8 @@ interface Asset {
   purchase: Date | null; warranty: Date | null; verified: Date | null; lastSeen: Date | null; statusDate: Date | null;
   deployDate: Date | null; created: Date | null; updated: Date | null; badDates: string[]; flags: Flag[];
   device: DeviceRef | null; prev: Asset | null; isNew: boolean; deployedNow: boolean;
+  // How it came into use this month: "stock" (from an In stock status), "new" (new asset already in use), "other" (repair, ...)
+  deployedFrom: string;
 }
 interface UserRef { email: string; empId: string; name: string; active: boolean; leaveDate: Date | null; }
 interface Users { source: string; byEmail: Map<string, UserRef>; byEmp: Map<string, UserRef>; count: number; inactive: number; }
@@ -605,6 +607,8 @@ interface Ctx {
   runInfo: string[][]; history: HistoryRow[]; prevOf: Map<string, string>; physical: Physical;
   stockAgeSource: string; deploySource: string; recon: Recon; po: PoData; formulas: boolean; curTabs: TabInfo[];
   prevTabs: TabInfo[]; tokens: string[];
+  // Stock & Utilisation table 7, kept between runs: [month YYYY-MM, category, deployed from stock, new straight to use]
+  deployHist: [string, string, number, number][];
 }
 interface Kpis {
   records: number; inScope: number; stages: Record<string, number>; issues: number; high: number; score: Cell;
@@ -980,7 +984,7 @@ function blankAsset(): Asset {
     standardStatus: false, stage: UNKNOWN, user: "", email: "", empId: "", costCenter: "", location: "", company: "", market: "",
     managedBy: "", cost: 0, po: "", functionUnit: "", comment: "", statusComment: "", scanAge: "", createdAge: "", purchase: null, warranty: null, verified: null,
     lastSeen: null, statusDate: null, deployDate: null, created: null, updated: null, badDates: [], flags: [], device: null,
-    prev: null, isNew: false, deployedNow: false
+    prev: null, isNew: false, deployedNow: false, deployedFrom: ""
   };
 }
 // Status, type, market and the other derived fields, from the raw values
@@ -1513,9 +1517,9 @@ function reconcile(ctx: Ctx, cur: AssetLoad, prevLoad: AssetLoad | null, prevAss
       rc.serialChanges.push({ cur: a, prev: p, change: !serialCompare(p.serial) ? SERIAL_ADDED : !serialCompare(a.serial) ? SERIAL_REMOVED : SERIAL_CHANGED });
     }
     // Deployed this month: moved into use from any other stage
-    if (a.stage === IN_USE && p.stage !== IN_USE) { a.deployedNow = true; }
+    if (a.stage === IN_USE && p.stage !== IN_USE) { a.deployedNow = true; a.deployedFrom = stockBucket(p, ctx.maps) === STOCK_STOCK ? "stock" : "other"; }
   });
-  rc.newAssets.forEach(a => { if (a.stage === IN_USE) { a.deployedNow = true; } });
+  rc.newAssets.forEach(a => { if (a.stage === IN_USE) { a.deployedNow = true; a.deployedFrom = "new"; } });
   prevMap.forEach((p, k) => { if (!curMap.has(k)) { rc.removed.push(p); } });
   prevAssets.concat(curAssets).filter(a => !a.standardStatus).forEach(a => rc.unknownStatuses.set(a.status || "(blank)",
     (rc.unknownStatuses.get(a.status || "(blank)") || 0) + 1));
@@ -1698,7 +1702,8 @@ function stockLines(ctx: Ctx): string[] {
     .filter(y => y[0]).map(y => `${fmtNum(y[0] as number)} ${y[1]}`).join(", ")})` : "";
   return stockSummary(ctx).filter((x, i) => i < 2 || x.use + x.stock).map((x, i) => (i < 2 ? "• " : "      o ") +
     `${x.label.trim()}: ${fmtNum(x.use)} in use${incl(x)}, ${fmtNum(x.stock)} in stock - ${p(x)} utilized` +
-    (ctx.recon.available ? `; ${fmtNum(x.deployed)} deployed this month` + (x.deployed ? `, stock covers about ${(x.stock / x.deployed).toFixed(1)} months` : "") : ""));
+    (ctx.recon.available ? `; ${fmtNum(x.fromStock)} deployed from stock this month` + (x.newDirect ? ` (+${fmtNum(x.newDirect)} new straight to use)` : "") : "") +
+    (x.avg ? `; stock covers about ${(x.stock / x.avg).toFixed(1)} months (${x.avgMonths === 1 ? "this month's pace" : `${x.avgMonths}-month average`})` : ""));
 }
 // The Spider comments of an asset for the email: the status comment first, then the general comment if it differs
 // The team's validation from the Scrap & Inactive Assets tab, or the placeholder to complete
@@ -2646,20 +2651,55 @@ function headsetConnection(a: Asset, maps: Mappings): string {
   HS_MEMO.map.set(a.model, c);
   return c;
 }
-interface StockRow { label: string; use: number; stock: number; deployed: number; authInactive: number; disabled: number; }
+// fromStock / newDirect: this month (exact, from the two exports); avg: deployed from stock per month over the last
+// DEPLOY_AVG_MONTHS months of table 7 (avgMonths = how many months it had); months of cover = stock / avg
+interface StockRow {
+  label: string; use: number; stock: number; authInactive: number; disabled: number; fromStock: number; newDirect: number;
+  avg: number; avgMonths: number;
+}
+const DEPLOY_AVG_MONTHS = 3, DEPLOY_HIST_TABLE = "tblStockDeployHistory";
+function coverOf(x: StockRow): Cell {
+  return x.avg ? x.stock / x.avg : "";
+}
 // [Notebooks, Headsets (all), Headsets - wired, Headsets - wireless, (Headsets - not sure, when any)]
 function stockSummary(ctx: Ctx): StockRow[] {
   const row = (label: string, keep: (a: Asset) => boolean): StockRow => {
     const list = ctx.assets.filter(a => keep(a)), use = list.filter(a => stockBucket(a, ctx.maps) === STOCK_USE);
-    return { label, use: use.length, stock: list.filter(a => stockBucket(a, ctx.maps) === STOCK_STOCK).length, deployed: deployRate(use, ctx),
+    const monthly = ctx.recon.available, fromStock = monthly ? use.filter(a => a.deployedFrom === "stock").length : 0;
+    // The average: this month (when there is a previous export) plus the latest earlier months of table 7
+    const key = label.trim(), now = deployPeriod(ctx);
+    const months = ctx.deployHist.filter(h => h[1] === key && h[0] < now).sort((x, y) => y[0].localeCompare(x[0]))
+      .map(h => h[2]).slice(0, monthly ? DEPLOY_AVG_MONTHS - 1 : DEPLOY_AVG_MONTHS);
+    const all = (monthly ? [fromStock] : []).concat(months);
+    return { label, use: use.length, stock: list.filter(a => stockBucket(a, ctx.maps) === STOCK_STOCK).length,
       authInactive: use.filter(a => inactiveWithUser(a, ctx.maps) === STOCK_USE_INACTIVE[0]).length,
-      disabled: use.filter(a => inactiveWithUser(a, ctx.maps) === STOCK_USE_INACTIVE[1]).length };
+      disabled: use.filter(a => inactiveWithUser(a, ctx.maps) === STOCK_USE_INACTIVE[1]).length,
+      fromStock, newDirect: monthly ? use.filter(a => a.deployedFrom === "new").length : 0,
+      avg: all.length ? all.reduce((t, n) => t + n, 0) / all.length : 0, avgMonths: all.length };
   };
   const hs = (c: string) => (a: Asset) => stockGroup(a) === STOCK_HEADSETS && headsetConnection(a, ctx.maps) === c;
   const out = [row(STOCK_NOTEBOOKS, a => stockGroup(a) === STOCK_NOTEBOOKS), row(STOCK_HEADSETS + " (all)", a => stockGroup(a) === STOCK_HEADSETS),
     row("   Wired headsets", hs("Wired")), row("   Wireless headsets", hs("Wireless"))];
   const extra = [row("   Headsets - not sure if wired (check model)", hs("Not sure (check model)"))];
   return out.concat(extra.filter(x => x.use + x.stock));
+}
+// The month this run's deployments belong to (this month's export)
+function deployPeriod(ctx: Ctx): string {
+  return ctx.recon.available ? ctx.recon.curPeriod : ctx.period;
+}
+// Table 7 as it was before this run (the user may also have typed earlier months into it)
+function readDeployHistory(wb: ExcelScript.Workbook): [string, string, number, number][] {
+  const t = wb.getTable(DEPLOY_HIST_TABLE);
+  if (!t || !t.getRowCount()) { return []; }
+  const head = (t.getHeaderRowRange().getValues()[0] as Raw[]).map(v => String(v));
+  const col = (h: string) => head.indexOf(h);
+  const num = (v: Raw) => typeof v === "number" ? v : Number(String(v).replace(/,/g, "")) || 0;
+  return (t.getRangeBetweenHeaderAndTotal().getValues() as Raw[][]).map(r => {
+    const m = r[col("Month")], d = typeof m === "number" ? new Date(Date.UTC(1899, 11, 30) + Math.round(m) * 86400000) : null;
+    const period = d ? `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}` : (String(m).match(/^\s*(\d{4})-(\d{1,2})/) || []).slice(1)
+      .map((x, i) => i ? x.padStart(2, "0") : x).join("-");
+    return [period, String(r[col("Category")]).trim(), num(r[col("Deployed from Stock")]), num(r[col("New Straight to Use")])] as [string, string, number, number];
+  }).filter(x => /^\d{4}-\d{2}$/.test(x[0]) && x[1]);
 }
 function utilOf(r: StockRow): Cell {
   return r.use + r.stock ? r.use / (r.use + r.stock) : "";
@@ -2672,15 +2712,15 @@ function buildStockSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
     "headset models under Zubehör-Client, split into wired and wireless by model name.");
   backLink(ws);
   const sum = stockSummary(ctx);
-  let r = sectionTitle(ws, 4, "1. Summary", monthly ? "Deployed this month = moved to In operation since the previous export; " +
-    "months of cover = in stock / deployed this month" : "Deployments need the previous export");
-  const coverOf = (x: StockRow): Cell => x.deployed ? x.stock / x.deployed : "";
+  let r = sectionTitle(ws, 4, "1. Summary", "Months of cover = in stock / average deployed from stock per month (this month and up to " +
+    `${DEPLOY_AVG_MONTHS - 1} earlier months from table 7). New assets put straight into use did not come from stock: shown, not in the cover.`);
   const sumTop = r + 1;
   r = addTable(ws, r, "tblStockSummary", ["Category", "In Use", "of which Authorised Inactive", "of which Disabled", "In Stock", "Utilization",
-    "Deployed This Month", "Months of Cover"],
-    sum.map(x => [x.label, x.use, x.authInactive, x.disabled, x.stock, utilOf(x), monthly ? x.deployed : "", monthly ? coverOf(x) : ""]),
-    { widths: [300, 100, 110, 100, 100, 100, 110, 100, 100], count: [1, 2, 3, 4, 6], pct: [5], num: [7], bars: [5] });
-  ws.getRangeByIndexes(sumTop, 0, 2, 8).getFormat().getFont().setBold(true);
+    "Deployed from Stock This Month", "New Straight to Use This Month", "Avg Deployed from Stock / Month", "Months in Average", "Months of Cover"],
+    sum.map(x => [x.label, x.use, x.authInactive, x.disabled, x.stock, utilOf(x), monthly ? x.fromStock : "", monthly ? x.newDirect : "",
+      x.avgMonths ? x.avg : "", x.avgMonths || "", coverOf(x)]),
+    { widths: [300, 100, 110, 100, 100, 100, 110, 110, 110, 90, 100], count: [1, 2, 3, 4, 6, 7, 9], pct: [5], num: [8, 10], bars: [5] });
+  ws.getRangeByIndexes(sumTop, 0, 2, 11).getFormat().getFont().setBold(true);
   // With a user but inactive: counted as in use, highlighted so they are never hidden
   ws.getRangeByIndexes(sumTop, 2, sum.length, 2).getFormat().getFill().setColor("#FFF2CC");
   ws.getRangeByIndexes(r - 2, 0, 1, 1).getFormat().getFont().setItalic(true);
@@ -2708,13 +2748,13 @@ function buildStockSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
   const byModel = (group: string): Cell[][] => Array.from(groupBy(ctx.assets.filter(a => stockGroup(a) === group &&
     stockBucket(a, maps) !== STOCK_OUT), a => a.assetClass + "\u0001" + (a.model || "(no model)")).entries()).map(e => {
     const [cls, model] = e[0].split("\u0001"), use = e[1].filter(a => stockBucket(a, maps) === STOCK_USE);
-    const st = e[1].filter(a => stockBucket(a, maps) === STOCK_STOCK).length, dep = deployRate(use, ctx);
+    const st = e[1].filter(a => stockBucket(a, maps) === STOCK_STOCK).length, dep = use.filter(a => a.deployedFrom === "stock").length;
     return [model, cls, group === STOCK_HEADSETS ? headsetConnection(e[1][0], maps) : "", use.length,
       use.filter(a => inactiveWithUser(a, maps)).length, st,
       use.length + st ? use.length / (use.length + st) : "", monthly ? dep : "", monthly && dep ? st / dep : ""] as Cell[];
   }).sort((x, y) => (y[5] as number) - (x[5] as number) || (y[3] as number) - (x[3] as number)).slice(0, 150);
   const modelOpts: TableOpts = { widths: [], count: [3, 4, 5, 7], pct: [6], num: [8] };
-  const head = (c: string) => ["Model", "Asset Type", c, "In Use", "of which Inactive with User", "In Stock", "Utilization", "Deployed This Month", "Months of Cover"];
+  const head = (c: string) => ["Model", "Asset Type", c, "In Use", "of which Inactive with User", "In Stock", "Utilization", "Deployed from Stock This Month", "Months of Cover (this month's pace)"];
   r = sectionTitle(ws, r, "3. Notebooks by model", "Most stock first");
   r = addTable(ws, r, "tblStockNotebookModels", head("").filter((h, i) => i !== 2), byModel(STOCK_NOTEBOOKS).map(x => x.filter((v, i) => i !== 2)),
     { widths: [], count: [2, 3, 4, 6], pct: [5], num: [7] });
@@ -2733,9 +2773,18 @@ function buildStockSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
   r = addTable(ws, r, "tblStockExcludedSummary", ["Not Counted Because", "Category", "Wired / Wireless", "Status", "Model", "Assets"], outRows, { widths: [], count: [5] });
   const sorted = out.slice().sort((x, y) => (excludedFU(y, maps) ? 1 : 0) - (excludedFU(x, maps) ? 1 : 0) || why(x).localeCompare(why(y)));
   r = sectionTitle(ws, r, "6. Not counted - assets", out.length > 5000 ? "Function Units first; the first 5,000 - filter the export for the rest" : "Function Units first");
-  addTable(ws, r, "tblStockExcludedAssets", ["Asset no.", "Not Counted Because", "Function Unit", "Category", "Asset Type", "Model", "Status", "Serial no.", "Last scan", "Status comment"],
+  r = addTable(ws, r, "tblStockExcludedAssets", ["Asset no.", "Not Counted Because", "Function Unit", "Category", "Asset Type", "Model", "Status", "Serial no.", "Last scan", "Status comment"],
     sorted.slice(0, 5000).map(a => [a.assetId, why(a), a.functionUnit, stockGroup(a), a.assetClass, a.model, a.status, a.serial, dateSerial(a.lastSeen), a.statusComment]),
     { widths: [], text: [0, 7], datetime: [8] });
+
+  // --- 7 Deployment history: kept between runs (this run adds or replaces its month); the source of the average
+  const now = deployPeriod(ctx), labels = sum.map(x => x.label.trim());
+  const hist = ctx.deployHist.filter(h => !(monthly && h[0] === now)).concat(monthly ? sum.map(x => [now, x.label.trim(), x.fromStock, x.newDirect] as
+    [string, string, number, number]) : []).sort((x, y) => y[0].localeCompare(x[0]) || labels.indexOf(x[1]) - labels.indexOf(y[1])).slice(0, 36 * 5);
+  r = sectionTitle(ws, r, "7. Deployment history (for the average)", "Each run adds this month. Keep this tab when you start next " +
+    "month's workbook, or type earlier months here (Month as YYYY-MM, Category as in table 1) - the next run uses them.");
+  addTable(ws, r, DEPLOY_HIST_TABLE, ["Month", "Category", "Deployed from Stock", "New Straight to Use"], hist.map(h => [h[0], h[1], h[2], h[3]]),
+    { widths: [], text: [0], count: [2, 3], blankRow: true });
 }
 // Why an asset is left out of stock utilization: its Function Unit, else its status
 function notCountedReason(a: Asset, maps: Mappings): string {
@@ -2869,17 +2918,21 @@ function buildGuideSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
   tab("Stock & Utilisation", "How much of the notebook and headset fleet is in use vs sitting in stock", [
     ["Which assets", "Notebooks (type Notebook) and headsets (type Headset, plus Zubehör-Client models that are headsets).",
       "A Zubehör-Client item is a headset when its model mentions Headset, Jabra, Plantronics, Blackwire, Evolve, EPOS, Sennheiser, Voyager, Poly, Supra, Yealink or Quest."],
-    ["1. Summary", "In use, in stock, utilization, deployed this month and months of cover for notebooks and headsets (wired / wireless).",
-      "Utilization = in use / (in use + in stock). Deployed = moved to In operation since last month. Months of cover = in stock / deployed."],
+    ["1. Summary", "In use, in stock, utilization, deployments and months of cover for notebooks and headsets (wired / wireless).",
+      "Utilization = in use / (in use + in stock). Deployed from stock = was In stock last month, In operation now. New straight to use = new " +
+      `asset already In operation (did not use stock: shown, not in the cover). Months of cover = in stock / average deployed from stock per month over the last ${DEPLOY_AVG_MONTHS} months (table 7).`],
     ["2. What is counted", "Every status of these assets and whether it counts as In use, In use - with user but inactive, In stock or Left out, with the excluded Function Units.",
       `Authorised inactive (user on long leave) and Disabled (not on the network for 90+ days) count as in use - the device is with a user - and have ` +
       `their own columns (yellow). ${fu} are left out whatever the status. Change the rules on the Mappings tab.`],
     ["3-4. By model", "Each notebook and headset model; headsets show Wired / Wireless.",
       "Wireless: Evolve 65 / 75 / 85, Evolve2 55 / 65 / 75 / 85, Voyager, Savi, Yealink BH, Engage, DECT, wireless, Bluetooth. Wired: Evolve 20-80 (not 55/65/75/85), " +
       "Blackwire, EPOS PC / SC, Supra, Plantronics Standard, TB310, USB, wired, jack, corded. Meta Quest counts as wireless. Anything else: " +
-      "'Not sure (check model)' - fix it with a Mappings 'Headset' row."],
+      "'Not sure (check model)' - fix it with a Mappings 'Headset' row. Months of cover per model uses this month only."],
     ["5. Not counted - summary", "Everything left out of the utilization, by reason (Function Unit or status), category, status and model.", "So nothing disappears silently."],
-    ["6. Not counted - assets", "Every left-out asset, Function Units first.", "Asset no., reason, Function Unit, type, model, status, serial, last scan, comment."]]);
+    ["6. Not counted - assets", "Every left-out asset, Function Units first.", "Asset no., reason, Function Unit, type, model, status, serial, last scan, comment."],
+    ["7. Deployment history", "Per month and category: deployed from stock and new straight to use.", "Each run adds or replaces its month and " +
+      "keeps the rest. Keep the tab when you start next month's workbook (or type earlier months as YYYY-MM): the average needs it. Until then " +
+      "the cover uses this month only ('Months in Average' says how many months were used)."]]);
   sub("Statuses and how they count for stock", ["Status", "Stage", "Stock utilization", "On Scrap & Inactive Assets"], VCAMS_STATUSES.map(x => {
     const own = ctx.maps.stockStatus.get(compactKey(x[0]));
     return [x[0], x[1], statusStockLabel(x[0], x[1], ctx.maps) + (own ? " (your Mappings row)" : ""),
@@ -3089,6 +3142,7 @@ function buildSummarySheet(wb: ExcelScript.Workbook, ctx: Ctx, notes: string[]):
 
 function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
   TABLES.n = 0;
+  ctx.deployHist = readDeployHistory(wb);
   const assets = ctx.assets, scope = assets.filter(a => inScope(a)), date = fmtDay(ctx.asOf);
   const kNow = kpiValues(metricsFor(ctx.history.filter(r => r.period === ctx.period && ctx.markets.indexOf(r.market) >= 0), ""));
   const kPrev = kpiValues(metricsFor(prevRows(ctx, ""), ""));
