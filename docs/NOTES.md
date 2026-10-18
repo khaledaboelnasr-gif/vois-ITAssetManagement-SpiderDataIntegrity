@@ -65,9 +65,12 @@ The spec is the "Monthly Asset Reconciliation Copilot Agent" instructions, writt
   in tab order (Part | What you see | How it works, with a link to the tab), and each tab's reference table under it:
   value groups (Pivot & Summary), change reasons (Scrap & Inactive Assets), PO results (POs Validated), statuses and how
   they count (Stock & Utilisation), every Mappings Kind (Mappings).
-- **Headsets (2026-10-18):** wired / wireless checked against the team's model list (Evolve2 55 and Yealink BH72 wireless;
-  Supra Plus and EPOS PC wired; Meta Quest = VR headset, shown separately). Plantronics Standard and TB310MKII+ stay
-  "Not sure" until a Mappings Headset row says otherwise.
+- **Headsets (2026-10-18):** wired / wireless checked against the team's model list (Evolve2 55, Yealink BH72 and Meta
+  Quest 2 wireless - Meta Quest is a normal headset, not a separate group; Supra Plus, EPOS PC, Plantronics Standard and
+  TB310MKII+ wired).
+- **Authorised inactive and Disabled (2026-10-18):** counted as in use for stock utilization (the device is with a user:
+  long leave / not on the network for 90+ days), shown in their own yellow columns and in the email "(incl. … authorised
+  inactive, … disabled)". A Mappings StockStatus row can still change this.
 - **Stock "not counted" (2026-10-18):** Stock tables 5-6 and the email list everything left out: excluded Function Units
   and every left-out status, per category, status and model.
   It is written from the script's own rules and lists, so it changes when they change. An empty Mappings tab is added

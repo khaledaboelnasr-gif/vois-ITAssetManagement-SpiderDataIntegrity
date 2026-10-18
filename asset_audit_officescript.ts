@@ -231,7 +231,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.18.12";
+const SCRIPT_VERSION = "2026.10.18.13";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -1685,7 +1685,10 @@ function typeRows(rc: Recon, group: string, maps: Mappings): [string, number, nu
 // Stock utilization for the email: Notebooks and Headsets (Headset type + headset models under Zubehör-Client)
 function stockLines(ctx: Ctx): string[] {
   const p = (x: StockRow) => utilOf(x) === "" ? "-" : (100 * (utilOf(x) as number)).toFixed(1) + "%";
-  return stockSummary(ctx).filter((x, i) => i < 2 || x.use + x.stock).map((x, i) => (i < 2 ? "• " : "      o ") + `${x.label.trim()}: ${fmtNum(x.use)} in use, ${fmtNum(x.stock)} in stock - ${p(x)} utilized` +
+  const incl = (x: StockRow) => x.authInactive + x.disabled ? ` (incl. ${[[x.authInactive, "authorised inactive"], [x.disabled, "disabled"]]
+    .filter(y => y[0]).map(y => `${fmtNum(y[0] as number)} ${y[1]}`).join(", ")})` : "";
+  return stockSummary(ctx).filter((x, i) => i < 2 || x.use + x.stock).map((x, i) => (i < 2 ? "• " : "      o ") +
+    `${x.label.trim()}: ${fmtNum(x.use)} in use${incl(x)}, ${fmtNum(x.stock)} in stock - ${p(x)} utilized` +
     (ctx.recon.available ? `; ${fmtNum(x.deployed)} deployed this month` + (x.deployed ? `, stock covers about ${(x.stock / x.deployed).toFixed(1)} months` : "") : ""));
 }
 // The Spider comments of an asset for the email: the status comment first, then the general comment if it differs
@@ -2508,7 +2511,7 @@ const ASSET_WIDTHS = [110, 110, 90, 90, 80, 110, 90, 100, 130, 130, 170, 120, 11
 
 // Stock utilisation covers Notebooks and Headsets only (user decision, 2026-10-18). Headsets are the "Headset" type plus
 // the headset models filed under "Zubehör-Client" (e.g. "Headset_Jabra Evolve 20_VE", "Headset Blackwire 520").
-const HEADSET_MODEL = /headset|jabra|plantronics|blackwire|evolve|epos|sennheiser|voyager|poly\b|supra|yealink|\bbh ?\d|quest|oculus/i;
+const HEADSET_MODEL = /headset|jabra|plantronics|blackwire|evolve|epos|sennheiser|voyager|poly\b|supra|yealink|\bbh ?\d|quest|oculus|\btb ?310/i;
 const STOCK_NOTEBOOKS = "Notebooks", STOCK_HEADSETS = "Headsets";
 function stockGroup(a: Asset): string {
   const t = compactKey(a.assetClass);
@@ -2518,12 +2521,16 @@ function stockGroup(a: Asset): string {
   return "";
 }
 // How an asset counts for stock utilization:
-//   In use   = status In operation
+//   In use   = status In operation, plus Authorised inactive and Disabled (the device is with a user) - shown separately
 //   In stock = In stock, Reserved, Ready for use, To install, Building
-//   left out = everything else (Scrapped, Marketed, Lost, Stolen, Inactive, Disabled, Authorised inactive, Ordered, ...)
+//   left out = everything else (Scrapped, Marketed, Lost, Stolen, Inactive, Ordered, ...)
 //              and every asset whose Function Unit is excluded
 // Mappings rows change this: "StockStatus | Reserved | Exclude" (or In use / In stock), "StockExclude | <Function Unit text>"
 const STOCK_USE = "In use", STOCK_STOCK = "In stock", STOCK_OUT = "Left out";
+// With a user but not active (user decision, 2026-10-18): Authorised inactive = user on long leave; Disabled = not on the
+// network for 90+ days. Counted as in use (not available stock), always shown on their own.
+const STOCK_USE_INACTIVE = ["Authorised inactive", "Disabled"];
+const STOCK_USE_INACTIVE_LABEL = "In use - with user, inactive";
 // Function Units left out of stock utilization (user decision, 2026-10-18), reported on their own; Mappings rows
 // "StockExclude | <text>" add more. Compared without case, spaces or punctuation, and "contains".
 const STOCK_EXCLUDE_FU = ["VOIS_EG Scrape Warehouse", "VOIS_EG Unreturned Devices"];
@@ -2542,16 +2549,30 @@ function excludedFU(a: Asset, maps: Mappings): boolean {
 }
 function stockBucket(a: Asset, maps: Mappings): string {
   if (excludedFU(a, maps)) { return STOCK_OUT; }
-  const own = maps.stockStatus.get(compactKey(a.status));
+  return statusStockBucket(a.status, a.stage, maps);
+}
+function statusStockBucket(status: string, stage: string, maps: Mappings): string {
+  const own = maps.stockStatus.get(compactKey(status));
   if (own) { return own; }
-  return a.stage === IN_USE ? STOCK_USE : a.stage === STOCK ? STOCK_STOCK : STOCK_OUT;
+  if (STOCK_USE_INACTIVE.some(x => compactKey(x) === compactKey(status))) { return STOCK_USE; }
+  return stage === IN_USE ? STOCK_USE : stage === STOCK ? STOCK_STOCK : STOCK_OUT;
+}
+// "Authorised inactive" / "Disabled" when the asset counts as in use because of that status, else ""
+function inactiveWithUser(a: Asset, maps: Mappings): string {
+  const hit = STOCK_USE_INACTIVE.find(x => compactKey(x) === compactKey(a.status));
+  return hit && !maps.stockStatus.get(compactKey(a.status)) && stockBucket(a, maps) === STOCK_USE ? hit : "";
+}
+// How a status counts, for the tables: In use, In use - with user, inactive, In stock or Left out
+function statusStockLabel(status: string, stage: string, maps: Mappings): string {
+  const b = statusStockBucket(status, stage, maps);
+  return b === STOCK_USE && !maps.stockStatus.get(compactKey(status)) && STOCK_USE_INACTIVE.some(x => compactKey(x) === compactKey(status)) ? STOCK_USE_INACTIVE_LABEL : b;
 }
 // Wired or wireless, from the headset model name (Mappings rows "Headset | <model text> | Wired / Wireless" come first).
 // Checked against the team's model list (2026-10-18): wireless Evolve 65/75, Evolve2 55, Voyager 4220/4320/B825, Yealink BH72;
-// wired Evolve 20, Blackwire 520/720/C3210/C3220/C3225/C5220, EPOS PC 8 / SC 60 USB, Supra Plus 251/261. Meta Quest = VR headset.
-const HEADSET_VR = /quest|oculus|\bvr\b/;
-const HEADSET_WIRELESS = /wireless|bluetooth|\bbt\b|voyager|savi|evolve2? ?(55|65|75|85)\b|engage|\bdect\b|\badapt\b|\blink\b|\bwl\b|\bbh ?\d+/;
-const HEADSET_WIRED = /wired|\busb\b|blackwire|evolve2? ?(20|30|40|50|80)\b|\bsc ?\d+|\bpc ?\d+|supra|jack|3\.5|corded|encore|\buc\b/;
+// wired Evolve 20, Blackwire 520/720/C3210/C3220/C3225/C5220, EPOS PC 8 / SC 60 USB, Supra Plus 251/261, Plantronics Standard,
+// TB310MKII+. Meta Quest 2 counts as a normal (wireless) headset.
+const HEADSET_WIRELESS = /wireless|bluetooth|\bbt\b|voyager|savi|evolve2? ?(55|65|75|85)\b|engage|\bdect\b|\badapt\b|\blink\b|\bwl\b|\bbh ?\d+|quest|oculus/;
+const HEADSET_WIRED = /wired|\busb\b|blackwire|evolve2? ?(20|30|40|50|80)\b|\bsc ?\d+|\bpc ?\d+|supra|plantronics standard|\btb ?310|jack|3\.5|corded|encore|\buc\b/;
 // Worked out once per model text
 const HS_MEMO = { map: new Map<string, string>(), maps: "" };
 function headsetConnection(a: Asset, maps: Mappings): string {
@@ -2561,21 +2582,23 @@ function headsetConnection(a: Asset, maps: Mappings): string {
   if (hit !== undefined) { return hit; }
   const m = a.model.toLowerCase(), t = m.replace(/[^a-z0-9.]+/g, " ");
   const own = maps.headset.find(h => m.indexOf(h[0]) >= 0);
-  const c = own ? own[1] : HEADSET_VR.test(t) ? "VR headset" : HEADSET_WIRELESS.test(t) ? "Wireless" : HEADSET_WIRED.test(t) ? "Wired" : "Not sure (check model)";
+  const c = own ? own[1] : HEADSET_WIRELESS.test(t) ? "Wireless" : HEADSET_WIRED.test(t) ? "Wired" : "Not sure (check model)";
   HS_MEMO.map.set(a.model, c);
   return c;
 }
-interface StockRow { label: string; use: number; stock: number; deployed: number; }
+interface StockRow { label: string; use: number; stock: number; deployed: number; authInactive: number; disabled: number; }
 // [Notebooks, Headsets (all), Headsets - wired, Headsets - wireless, (Headsets - not sure, when any)]
 function stockSummary(ctx: Ctx): StockRow[] {
   const row = (label: string, keep: (a: Asset) => boolean): StockRow => {
     const list = ctx.assets.filter(a => keep(a)), use = list.filter(a => stockBucket(a, ctx.maps) === STOCK_USE);
-    return { label, use: use.length, stock: list.filter(a => stockBucket(a, ctx.maps) === STOCK_STOCK).length, deployed: deployRate(use, ctx) };
+    return { label, use: use.length, stock: list.filter(a => stockBucket(a, ctx.maps) === STOCK_STOCK).length, deployed: deployRate(use, ctx),
+      authInactive: use.filter(a => inactiveWithUser(a, ctx.maps) === STOCK_USE_INACTIVE[0]).length,
+      disabled: use.filter(a => inactiveWithUser(a, ctx.maps) === STOCK_USE_INACTIVE[1]).length };
   };
   const hs = (c: string) => (a: Asset) => stockGroup(a) === STOCK_HEADSETS && headsetConnection(a, ctx.maps) === c;
   const out = [row(STOCK_NOTEBOOKS, a => stockGroup(a) === STOCK_NOTEBOOKS), row(STOCK_HEADSETS + " (all)", a => stockGroup(a) === STOCK_HEADSETS),
     row("   Wired headsets", hs("Wired")), row("   Wireless headsets", hs("Wireless"))];
-  const extra = [row("   VR headsets", hs("VR headset")), row("   Headsets - not sure if wired (check model)", hs("Not sure (check model)"))];
+  const extra = [row("   Headsets - not sure if wired (check model)", hs("Not sure (check model)"))];
   return out.concat(extra.filter(x => x.use + x.stock));
 }
 function utilOf(r: StockRow): Cell {
@@ -2593,40 +2616,48 @@ function buildStockSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
     "months of cover = in stock / deployed this month" : "Deployments need the previous export");
   const coverOf = (x: StockRow): Cell => x.deployed ? x.stock / x.deployed : "";
   const sumTop = r + 1;
-  r = addTable(ws, r, "tblStockSummary", ["Category", "In Use", "In Stock", "Utilization", "Deployed This Month", "Months of Cover"],
-    sum.map(x => [x.label, x.use, x.stock, utilOf(x), monthly ? x.deployed : "", monthly ? coverOf(x) : ""]),
-    { widths: [300, 110, 90, 90, 110, 100, 100, 100], count: [1, 2, 4], pct: [3], num: [5], bars: [3] });
-  ws.getRangeByIndexes(sumTop, 0, 2, 6).getFormat().getFont().setBold(true);
+  r = addTable(ws, r, "tblStockSummary", ["Category", "In Use", "of which Authorised Inactive", "of which Disabled", "In Stock", "Utilization",
+    "Deployed This Month", "Months of Cover"],
+    sum.map(x => [x.label, x.use, x.authInactive, x.disabled, x.stock, utilOf(x), monthly ? x.deployed : "", monthly ? coverOf(x) : ""]),
+    { widths: [300, 100, 110, 100, 100, 100, 110, 100, 100], count: [1, 2, 3, 4, 6], pct: [5], num: [7], bars: [5] });
+  ws.getRangeByIndexes(sumTop, 0, 2, 8).getFormat().getFont().setBold(true);
+  // With a user but inactive: counted as in use, highlighted so they are never hidden
+  ws.getRangeByIndexes(sumTop, 2, sum.length, 2).getFormat().getFill().setColor("#FFF2CC");
+  ws.getRangeByIndexes(r - 2, 0, 1, 1).getFormat().getFont().setItalic(true);
+  putValues(ws, r - 2, 0, [["In use includes Authorised inactive (user on long leave) and Disabled (not on the network for 90+ days): " +
+    "the device is with a user, so it is not available stock. Disabled devices are worth chasing."]]);
 
   // --- 2 What is counted: every status (and excluded Function Units) of these assets, and how it counts
   const pool = ctx.assets.filter(a => stockGroup(a));
   const keyOf = (a: Asset) => excludedFU(a, maps) ? "\u0001" + a.functionUnit : (a.status || "(blank)");
   const counted: Cell[][] = Array.from(groupBy(pool, a => keyOf(a)).entries()).map(e => {
     const fu = e[0].charAt(0) === "\u0001";
-    return [fu ? `Function Unit: ${e[0].slice(1)} (any status - see table 5)` : e[0], fu ? STOCK_OUT : stockBucket(e[1][0], maps),
+    return [fu ? `Function Unit: ${e[0].slice(1)} (any status - see table 5)` : e[0], fu ? STOCK_OUT : statusStockLabel(e[1][0].status, e[1][0].stage, maps),
       e[1].filter(a => stockGroup(a) === STOCK_NOTEBOOKS).length, e[1].filter(a => stockGroup(a) === STOCK_HEADSETS).length] as Cell[];
-  }).sort((x, y) => [STOCK_USE, STOCK_STOCK, STOCK_OUT].indexOf(String(x[1])) - [STOCK_USE, STOCK_STOCK, STOCK_OUT].indexOf(String(y[1])) ||
+  }).sort((x, y) => [STOCK_USE, STOCK_USE_INACTIVE_LABEL, STOCK_STOCK, STOCK_OUT].indexOf(String(x[1])) -
+    [STOCK_USE, STOCK_USE_INACTIVE_LABEL, STOCK_STOCK, STOCK_OUT].indexOf(String(y[1])) ||
     (y[2] as number) + (y[3] as number) - (x[2] as number) - (x[3] as number));
   r = sectionTitle(ws, r, "2. What is counted", "Change it on the Mappings tab: 'StockStatus | Reserved | Exclude' (or In use / In stock), " +
     "'StockExclude | <Function Unit text>' to leave out a Function Unit, 'Headset | <model text> | Wired / Wireless'");
   const cTop = r + 1;
   r = addTable(ws, r, "tblStockCounted", ["Status", "Counted As", "Notebooks", "Headsets"], counted, { widths: [], count: [2, 3] });
   counted.forEach((x, i) => ws.getRangeByIndexes(cTop + i, 1, 1, 1).getFormat().getFill().setColor(
-    x[1] === STOCK_USE ? "#E2EFDA" : x[1] === STOCK_STOCK ? "#DDEBF7" : "#F2F2F2"));
+    x[1] === STOCK_USE ? "#E2EFDA" : x[1] === STOCK_USE_INACTIVE_LABEL ? "#FFF2CC" : x[1] === STOCK_STOCK ? "#DDEBF7" : "#F2F2F2"));
 
   // --- 3-4 Per model, most stock first (headsets with wired / wireless)
   const byModel = (group: string): Cell[][] => Array.from(groupBy(ctx.assets.filter(a => stockGroup(a) === group &&
     stockBucket(a, maps) !== STOCK_OUT), a => a.assetClass + "\u0001" + (a.model || "(no model)")).entries()).map(e => {
     const [cls, model] = e[0].split("\u0001"), use = e[1].filter(a => stockBucket(a, maps) === STOCK_USE);
     const st = e[1].filter(a => stockBucket(a, maps) === STOCK_STOCK).length, dep = deployRate(use, ctx);
-    return [model, cls, group === STOCK_HEADSETS ? headsetConnection(e[1][0], maps) : "", use.length, st,
+    return [model, cls, group === STOCK_HEADSETS ? headsetConnection(e[1][0], maps) : "", use.length,
+      use.filter(a => inactiveWithUser(a, maps)).length, st,
       use.length + st ? use.length / (use.length + st) : "", monthly ? dep : "", monthly && dep ? st / dep : ""] as Cell[];
-  }).sort((x, y) => (y[4] as number) - (x[4] as number) || (y[3] as number) - (x[3] as number)).slice(0, 150);
-  const modelOpts: TableOpts = { widths: [], count: [3, 4, 6], pct: [5], num: [7] };
-  const head = (c: string) => ["Model", "Asset Type", c, "In Use", "In Stock", "Utilization", "Deployed This Month", "Months of Cover"];
+  }).sort((x, y) => (y[5] as number) - (x[5] as number) || (y[3] as number) - (x[3] as number)).slice(0, 150);
+  const modelOpts: TableOpts = { widths: [], count: [3, 4, 5, 7], pct: [6], num: [8] };
+  const head = (c: string) => ["Model", "Asset Type", c, "In Use", "of which Inactive with User", "In Stock", "Utilization", "Deployed This Month", "Months of Cover"];
   r = sectionTitle(ws, r, "3. Notebooks by model", "Most stock first");
   r = addTable(ws, r, "tblStockNotebookModels", head("").filter((h, i) => i !== 2), byModel(STOCK_NOTEBOOKS).map(x => x.filter((v, i) => i !== 2)),
-    { widths: [], count: [2, 3, 5], pct: [4], num: [6] });
+    { widths: [], count: [2, 3, 4, 6], pct: [5], num: [7] });
   r = sectionTitle(ws, r, "4. Headsets by model", "Type Headset and headset models under Zubehör-Client; most stock first");
   r = addTable(ws, r, "tblStockHeadsetModels", head("Wired / Wireless"), byModel(STOCK_HEADSETS), modelOpts);
 
@@ -2767,16 +2798,18 @@ function buildGuideSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
       "A Zubehör-Client item is a headset when its model mentions Headset, Jabra, Plantronics, Blackwire, Evolve, EPOS, Sennheiser, Voyager, Poly, Supra, Yealink or Quest."],
     ["1. Summary", "In use, in stock, utilization, deployed this month and months of cover for notebooks and headsets (wired / wireless).",
       "Utilization = in use / (in use + in stock). Deployed = moved to In operation since last month. Months of cover = in stock / deployed."],
-    ["2. What is counted", "Every status of these assets and whether it counts as In use, In stock or Left out, with the excluded Function Units.",
-      `${fu} are left out whatever the status. Change the rules on the Mappings tab.`],
+    ["2. What is counted", "Every status of these assets and whether it counts as In use, In use - with user but inactive, In stock or Left out, with the excluded Function Units.",
+      `Authorised inactive (user on long leave) and Disabled (not on the network for 90+ days) count as in use - the device is with a user - and have ` +
+      `their own columns (yellow). ${fu} are left out whatever the status. Change the rules on the Mappings tab.`],
     ["3-4. By model", "Each notebook and headset model; headsets show Wired / Wireless.",
       "Wireless: Evolve 65 / 75 / 85, Evolve2 55 / 65 / 75 / 85, Voyager, Savi, Yealink BH, Engage, DECT, wireless, Bluetooth. Wired: Evolve 20-80 (not 55/65/75/85), " +
-      "Blackwire, EPOS PC / SC, Supra, USB, wired, jack, corded. Meta Quest = VR headset. Anything else: 'Not sure (check model)' - fix it with a Mappings 'Headset' row."],
+      "Blackwire, EPOS PC / SC, Supra, Plantronics Standard, TB310, USB, wired, jack, corded. Meta Quest counts as wireless. Anything else: " +
+      "'Not sure (check model)' - fix it with a Mappings 'Headset' row."],
     ["5. Not counted - summary", "Everything left out of the utilization, by reason (Function Unit or status), category, status and model.", "So nothing disappears silently."],
     ["6. Not counted - assets", "Every left-out asset, Function Units first.", "Asset no., reason, Function Unit, type, model, status, serial, last scan, comment."]]);
   sub("Statuses and how they count for stock", ["Status", "Stage", "Stock utilization", "On Scrap & Inactive Assets"], VCAMS_STATUSES.map(x => {
     const own = ctx.maps.stockStatus.get(compactKey(x[0]));
-    return [x[0], x[1], own ? own + " (your Mappings row)" : x[1] === IN_USE ? STOCK_USE : x[1] === STOCK ? STOCK_STOCK : STOCK_OUT,
+    return [x[0], x[1], statusStockLabel(x[0], x[1], ctx.maps) + (own ? " (your Mappings row)" : ""),
       OPERATIONAL_STATUSES.indexOf(x[0]) >= 0 ? "Yes, when new this month" : ""] as Cell[];
   }).concat([["Any other status (e.g. Damaged, Delivered)", "From its name", STOCK_OUT + " unless a Mappings row says otherwise", ""]]));
 
