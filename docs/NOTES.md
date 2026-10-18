@@ -61,6 +61,14 @@ The spec is the "Monthly Asset Reconciliation Copilot Agent" instructions, writt
 
 ## Key decisions
 
+- **Stock utilisation = Notebooks and Headsets only (user decision, 2026-10-18).** Headsets = type "Headset" plus
+  headset models filed under "Zubehör-Client" (model matches Headset / Jabra / Plantronics / Blackwire / Evolve / EPOS /
+  Sennheiser / Voyager / Poly). In use = stage In Use; in stock = In stock, Reserved, Ready for use, To install, Building.
+- **Pivot & Summary layout (2026-10-18).** Numbered headings on every table: 1 Key figures (each value a live formula on
+  the detail tab it links to), 2 Assets by type, 3 Status changes (columns A-E); 4-7 New assets by type / PO / filled
+  or empty / model (G-H); 8-10 the PivotTables side by side (J, M, P). Every table header is VOIS red with white text;
+  every detail tab has a "Back to Pivot & Summary" link in row 3.
+
 - **Report only (user decision, 2026-10-18).** The script makes what the team already makes and sends each month,
   plus stock utilisation, and nothing else: Monthly Email, Pivot & Summary, New Assets, Removed Assets (when any),
   Serial Number Changes, Scrap & Inactive Assets, POs Validated, Stock & Utilisation. Tabs from earlier full-audit

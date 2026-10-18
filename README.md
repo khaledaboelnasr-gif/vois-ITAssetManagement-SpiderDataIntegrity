@@ -78,6 +78,12 @@ python3 gen_synthetic.py 100000 > big.json
 MAXCALLS=6000 NORERUN=1 node harness.mjs ../asset_audit_officescript.ts big.json
 ```
 
+To see how the tabs look, render them as pictures (needs Playwright, which is only a dev tool):
+
+```bash
+RENDER=preview NORERUN=1 node harness.mjs ../asset_audit_officescript.ts synthetic.json && node screenshot.mjs preview
+```
+
 `harness.mjs` reads these environment options:
 
 | Option | Effect |
@@ -94,6 +100,7 @@ MAXCALLS=6000 NORERUN=1 node harness.mjs ../asset_audit_officescript.ts big.json
 | `HISTOUT=<file>` | Saves `historyRows` to a file. |
 | `NORERUN=1` | Skips the re-run on the same workbook. |
 | `MAXCALLS=<n>` | Fails if the run makes more than n Excel calls (an Excel call inside a per-row loop). |
+| `RENDER=<dir>` | Writes an HTML picture of each result tab (formatting, links, tables, PivotTables); `screenshot.mjs <dir>` turns them into PNGs. |
 | `BRIEFOUT=<file>` | Saves the agent brief (`agentInput`), to compare two versions. |
 
 An optional third argument is a history JSON file.

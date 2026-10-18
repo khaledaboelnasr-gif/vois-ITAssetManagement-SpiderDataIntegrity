@@ -231,7 +231,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.18.1";
+const SCRIPT_VERSION = "2026.10.18.2";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -1564,9 +1564,9 @@ function poReconRows(ctx: Ctx): Cell[][] {
   byPo.forEach((list, po) => {
     if (supplied.has(po)) { return; }
     rows.push(po ? [po, topList(list.map(a => a.model), 2), list.length, "", "", "", "", PO_RESULTS.missing]
-      : ["", topList(list.map(a => a.model), 2), list.length, "", "", "", "", PO_RESULTS.blank]);
+      : ["(empty)", topList(list.map(a => a.model), 2), list.length, "", "", "", "", PO_RESULTS.blank]);
   });
-  return rows.sort((a, b) => (a[0] === "" ? 1 : 0) - (b[0] === "" ? 1 : 0) || String(a[0]).localeCompare(String(b[0])));
+  return rows.sort((a, b) => (a[0] === "(empty)" ? 1 : 0) - (b[0] === "(empty)" ? 1 : 0) || String(a[0]).localeCompare(String(b[0])));
 }
 // The completion report lines (also returned to the flow)
 function reconText(ctx: Ctx): string[] {
@@ -1643,21 +1643,11 @@ function typeRows(rc: Recon, group: string, maps: Mappings): [string, number, nu
 }
 // One line per PO for the email: what the PO contains (user-supplied), what is already on Spider (new assets with that
 // PO), and what is still pending. Supplied models are matched to asset types ("Bags" = Bag, "Mouses" / "Mice" = Mouse).
-// Stock utilization for the email: in use vs in stock per asset type (standard order), deployments this month and
-// months of stock at that pace. Utilization = in use / (in use + in stock).
+// Stock utilization for the email: Notebooks and Headsets (Headset type + headset models under Zubehör-Client)
 function stockLines(ctx: Ctx): string[] {
-  const rows = utilisationRows(ctx, ctx.assets, a => [a.assetClass]);
-  const order = VCAMS_TYPES.map(t => t[0]);
-  rows.sort((a, b) => (order.indexOf(String(a[0])) < 0 ? 99 : order.indexOf(String(a[0]))) - (order.indexOf(String(b[0])) < 0 ? 99 : order.indexOf(String(b[0]))));
-  const use = rows.reduce((s, r) => s + (r[1] as number), 0), stock = rows.reduce((s, r) => s + (r[2] as number), 0);
-  const pctText = (u: number, st: number) => u + st ? (100 * u / (u + st)).toFixed(1) + "%" : "-";
-  const out = [`• Overall: ${fmtNum(use)} in use, ${fmtNum(stock)} in stock - ${pctText(use, stock)} utilized`];
-  rows.forEach(r => {
-    const t = String(r[0]), u = r[1] as number, st = r[2] as number, pm = r[10] as number, cover = r[11];
-    out.push(`      o ${/s$|-/i.test(t) ? t : t + "s"}: ${fmtNum(u)} in use, ${fmtNum(st)} in stock - ${pctText(u, st)} utilized` +
-      (ctx.recon.available ? `; ${fmtNum(pm)} deployed this month` + (cover !== "" ? `, stock covers about ${(cover as number).toFixed(1)} months` : "") : ""));
-  });
-  return out;
+  const p = (x: StockRow) => utilOf(x) === "" ? "-" : (100 * (utilOf(x) as number)).toFixed(1) + "%";
+  return stockSummary(ctx).map((x, i) => (i < 2 ? "• " : "      o ") + `${x.label.trim()}: ${fmtNum(x.use)} in use, ${fmtNum(x.stock)} in stock - ${p(x)} utilized` +
+    (ctx.recon.available ? `; ${fmtNum(x.deployed)} deployed this month` + (x.deployed ? `, stock covers about ${(x.stock / x.deployed).toFixed(1)} months` : "") : ""));
 }
 // The Spider comments of an asset for the email: the status comment first, then the general comment if it differs
 function spiderComment(a: Asset): string {
@@ -1836,9 +1826,10 @@ function monthlyReport(ctx: Ctx): MonthlyReport {
       `blank PurchaseNo ${fmtNum(blankPo)}` : "no new assets") +
     (rc.operational.length ? `; scrapped or lost by type ${top(countBy(rc.operational.map(c => c.cur.assetClass)), 3)}` : "") +
     (rc.serialChecked && rc.serialChanges.length ? `; serials ${top(countBy(rc.serialChanges.map(c => serialShort(c.change))), 3)}` : "") +
-    (rc.removed.length ? "; removed assets are to be reviewed, not treated as scrapped" : "") + `; ${stockLines(ctx)[0].replace("• Overall: ", "stock: ")}.`);
+    (rc.removed.length ? "; removed assets are to be reviewed, not treated as scrapped" : "") + "; stock utilization " +
+    stockSummary(ctx).slice(0, 2).map(x => `${x.label.replace(" (all)", "")} ${utilOf(x) === "" ? "-" : (100 * (utilOf(x) as number)).toFixed(1) + "%"}`).join(", ") + ".");
   ppt.push("Slide 3, PO validation and points for review: a small table with columns PO, Model, In export, Supplied, Variance, Result: " +
-    (po.length ? po.slice(0, 4).map(r => `${r[0] || "Blank PurchaseNo"}, ${model(r) || "-"}, ${fmtNum(r[2] as number)}, ` +
+    (po.length ? po.slice(0, 4).map(r => `${r[0] === "(empty)" ? "Empty PurchaseNo" : r[0]}, ${model(r) || "-"}, ${fmtNum(r[2] as number)}, ` +
       `${r[3] === "" ? "-" : fmtNum(r[3] as number)}, ${r[4] === "" ? "-" : signed(r[4] as number)}, ${r[7]}`).join("; ") +
       (po.length > 4 ? `; and ${po.length - 4} more POs in the workbook` : "") : "no new-asset POs") +
     `. Then up to 3 bullets for review: ${review.length ? review.slice(0, 3).join("; ") : "none"}.`);
@@ -2358,52 +2349,71 @@ function putValues(ws: ExcelScript.Worksheet, row: number, col: number, values: 
 }
 interface TableOpts {
   widths: number[]; wrap?: number[]; pct?: number[]; bars?: number[]; change?: number[]; num?: number[]; freeze?: boolean;
-  text?: number[]; date?: number[]; datetime?: number[]; count?: number[]; diff?: number[]; blankRow?: boolean;
+  text?: number[]; date?: number[]; datetime?: number[]; count?: number[]; diff?: number[]; blankRow?: boolean; col?: number;
 }
 const TABLES = { n: 0 };
-// Writes a formatted Excel table with its header at 0-based row `row`; returns the next free row. A name starting
-// with "tbl" is used as it is (the monthly process's fixed table names); others get a unique suffix.
+// Writes a formatted Excel table with its header at 0-based row `row` (and column `opts.col`, default A); returns the
+// next free row. A name starting with "tbl" is used as it is (fixed names, used by formulas and PivotTables); others
+// get a unique suffix. Header: VOIS red, white bold text.
 function addTable(ws: ExcelScript.Worksheet, row: number, name: string, header: string[], rows: Cell[][], opts: TableOpts): number {
-  const text = opts.text || [];
+  const text = opts.text || [], c0 = opts.col || 0;
   const body: Cell[][] = rows.length ? rows.map(r => r.concat(new Array<Cell>(Math.max(0, header.length - r.length)).fill("")).slice(0, header.length)
     .map((v, i) => text.indexOf(i) >= 0 && typeof v === "number" ? String(v) : v))
     : [header.map((h, i) => i === 0 && !opts.blankRow ? "None found" : "")];
-  putValues(ws, row, 0, [header]);
+  putValues(ws, row, c0, [header]);
   // Identifiers as text before writing, so long numbers and leading zeros survive
-  text.forEach(c => ws.getRangeByIndexes(row + 1, c, body.length, 1).setNumberFormat("@"));
-  putValues(ws, row + 1, 0, body);
-  const table = ws.addTable(ws.getRangeByIndexes(row, 0, body.length + 1, header.length), true);
+  text.forEach(c => ws.getRangeByIndexes(row + 1, c0 + c, body.length, 1).setNumberFormat("@"));
+  putValues(ws, row + 1, c0, body);
+  const table = ws.addTable(ws.getRangeByIndexes(row, c0, body.length + 1, header.length), true);
   TABLES.n++;
   table.setName(/^tbl/.test(name) ? name : `t${name}${TABLES.n}`);
-  table.setPredefinedTableStyle("TableStyleMedium15");
+  table.setPredefinedTableStyle("TableStyleLight15");
+  const head = ws.getRangeByIndexes(row, c0, 1, header.length).getFormat();
+  head.getFill().setColor(BRAND);
+  head.getFont().setColor("#FFFFFF");
+  head.getFont().setBold(true);
+  head.setWrapText(true);
+  head.setVerticalAlignment(ExcelScript.VerticalAlignment.center);
   if (opts.freeze) { ws.getFreezePanes().freezeRows(row + 1); }
-  opts.widths.forEach((w, c) => ws.getRangeByIndexes(0, c, 1, 1).getFormat().setColumnWidth(w));
-  ws.getRangeByIndexes(row + 1, 0, body.length, header.length).getFormat().setVerticalAlignment(ExcelScript.VerticalAlignment.top);
-  ws.getRangeByIndexes(row, 0, 1, header.length).getFormat().setWrapText(true);
-  (opts.wrap || []).forEach(c => ws.getRangeByIndexes(row + 1, c, body.length, 1).getFormat().setWrapText(true));
-  (opts.pct || []).forEach(c => ws.getRangeByIndexes(row + 1, c, body.length, 1).setNumberFormat("0.0%"));
-  (opts.num || []).forEach(c => ws.getRangeByIndexes(row + 1, c, body.length, 1).setNumberFormat("#,##0.0"));
+  opts.widths.forEach((w, c) => ws.getRangeByIndexes(0, c0 + c, 1, 1).getFormat().setColumnWidth(w));
+  ws.getRangeByIndexes(row + 1, c0, body.length, header.length).getFormat().setVerticalAlignment(ExcelScript.VerticalAlignment.top);
+  const col = (c: number) => ws.getRangeByIndexes(row + 1, c0 + c, body.length, 1);
+  (opts.wrap || []).forEach(c => col(c).getFormat().setWrapText(true));
+  (opts.pct || []).forEach(c => col(c).setNumberFormat("0.0%"));
+  (opts.num || []).forEach(c => col(c).setNumberFormat("#,##0.0"));
   (opts.bars || []).forEach(c => {
-    const cf = ws.getRangeByIndexes(row + 1, c, body.length, 1).addConditionalFormat(ExcelScript.ConditionalFormatType.dataBar);
+    const cf = col(c).addConditionalFormat(ExcelScript.ConditionalFormatType.dataBar);
     const bar = cf.getDataBar();
     if (bar) { bar.getPositiveFormat().setFillColor("#F4B6B6"); }
   });
   // Red = worse (more issues), green = better: a colour number format (conditional font colours fail on the web)
-  (opts.change || []).forEach(c => ws.getRangeByIndexes(row + 1, c, body.length, 1).setNumberFormat("[Red]+#,##0.0;[Color10]-#,##0.0;0"));
-  (opts.date || []).forEach(c => ws.getRangeByIndexes(row + 1, c, body.length, 1).setNumberFormat(FMT_DATE));
-  (opts.datetime || []).forEach(c => ws.getRangeByIndexes(row + 1, c, body.length, 1).setNumberFormat(FMT_DATETIME));
-  (opts.count || []).forEach(c => ws.getRangeByIndexes(row + 1, c, body.length, 1).setNumberFormat(FMT_COUNT));
-  (opts.diff || []).forEach(c => ws.getRangeByIndexes(row + 1, c, body.length, 1).setNumberFormat(FMT_DIFF));
+  (opts.change || []).forEach(c => col(c).setNumberFormat("[Red]+#,##0.0;[Color10]-#,##0.0;0"));
+  (opts.date || []).forEach(c => col(c).setNumberFormat(FMT_DATE));
+  (opts.datetime || []).forEach(c => col(c).setNumberFormat(FMT_DATETIME));
+  (opts.count || []).forEach(c => col(c).setNumberFormat(FMT_COUNT));
+  (opts.diff || []).forEach(c => col(c).setNumberFormat(FMT_DIFF));
   return row + body.length + 3;
 }
-function sectionTitle(ws: ExcelScript.Worksheet, row: number, text: string, note?: string): number {
-  putValues(ws, row, 0, [[text]]);
-  const f = ws.getRangeByIndexes(row, 0, 1, 1).getFormat().getFont();
+// A link to another tab (or a cell): `target` is a sheet name, or "Sheet!A10"
+function link(ws: ExcelScript.Worksheet, row: number, col: number, text: string, target: string): void {
+  const parts = target.split("!"), ref = `'${parts[0].replace(/'/g, "''")}'!${parts[1] || "A1"}`;
+  ws.getRangeByIndexes(row, col, 1, 1).setHyperlink({ documentReference: ref, textToDisplay: text, screenTip: `Go to ${parts[0]}` });
+  ws.getRangeByIndexes(row, col, 1, 1).getFormat().getFont().setColor("#0563C1");
+  ws.getRangeByIndexes(row, col, 1, 1).getFormat().getFont().setUnderline(ExcelScript.RangeUnderlineStyle.single);
+}
+// Row 3 of the detail tabs: back to the summary
+function backLink(ws: ExcelScript.Worksheet): void {
+  link(ws, 2, 0, "‹ Back to Pivot & Summary", SUMMARY_SHEET);
+}
+function sectionTitle(ws: ExcelScript.Worksheet, row: number, text: string, note?: string, col?: number): number {
+  const c = col || 0;
+  putValues(ws, row, c, [[text]]);
+  const f = ws.getRangeByIndexes(row, c, 1, 1).getFormat().getFont();
   f.setBold(true); f.setColor(BRAND); f.setSize(12);
   if (note) {
-    putValues(ws, row + 1, 0, [[note]]);
-    ws.getRangeByIndexes(row + 1, 0, 1, 1).getFormat().getFont().setItalic(true);
-    ws.getRangeByIndexes(row + 1, 0, 1, 1).getFormat().getFont().setColor(GREY);
+    putValues(ws, row + 1, c, [[note]]);
+    ws.getRangeByIndexes(row + 1, c, 1, 1).getFormat().getFont().setItalic(true);
+    ws.getRangeByIndexes(row + 1, c, 1, 1).getFormat().getFont().setColor(GREY);
     return row + 2;
   }
   return row + 1;
@@ -2421,46 +2431,217 @@ const ASSET_HEADER = ["Asset", "Market", "Asset Type", "VCAMS Status", "Stage", 
   "Assigned User", "User Email", "Location", "Managed By"];
 const ASSET_WIDTHS = [110, 110, 90, 90, 80, 110, 90, 100, 130, 130, 170, 120, 110];
 
-// Stock & Utilisation: in use vs in stock, stock age, deployments, months of cover, by market, type, site and model
+// Stock utilisation covers Notebooks and Headsets only (user decision, 2026-10-18). Headsets are the "Headset" type plus
+// the headset models filed under "Zubehör-Client" (e.g. "Headset_Jabra Evolve 20_VE", "Headset Blackwire 520").
+const HEADSET_MODEL = /headset|jabra|plantronics|blackwire|evolve|epos|sennheiser|voyager|poly\b/i;
+const STOCK_NOTEBOOKS = "Notebooks", STOCK_HEADSETS = "Headsets";
+function stockGroup(a: Asset): string {
+  const t = compactKey(a.assetClass);
+  if (t === "notebook") { return STOCK_NOTEBOOKS; }
+  if (t === "headset") { return STOCK_HEADSETS; }
+  if (t === compactKey("Zubehör-Client") && HEADSET_MODEL.test(a.model)) { return STOCK_HEADSETS; }
+  return "";
+}
+interface StockRow { label: string; use: number; stock: number; deployed: number; }
+// [Notebooks, Headsets (all), Headsets - Headset type, Headsets - Zubehör-Client headset models]
+function stockSummary(ctx: Ctx): StockRow[] {
+  const row = (label: string, keep: (a: Asset) => boolean): StockRow => {
+    const list = ctx.assets.filter(a => keep(a)), use = list.filter(a => a.stage === IN_USE);
+    return { label, use: use.length, stock: list.filter(a => a.stage === STOCK).length, deployed: deployRate(use, ctx) };
+  };
+  return [
+    row(STOCK_NOTEBOOKS, a => stockGroup(a) === STOCK_NOTEBOOKS),
+    row(STOCK_HEADSETS + " (all)", a => stockGroup(a) === STOCK_HEADSETS),
+    row("   of which type Headset", a => stockGroup(a) === STOCK_HEADSETS && compactKey(a.assetClass) === "headset"),
+    row("   of which under Zubehör-Client", a => stockGroup(a) === STOCK_HEADSETS && compactKey(a.assetClass) !== "headset")
+  ];
+}
+function utilOf(r: StockRow): Cell {
+  return r.use + r.stock ? r.use / (r.use + r.stock) : "";
+}
 function buildStockSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
   progress("Writing Stock & Utilisation");
-  const assets = ctx.assets, date = fmtDay(ctx.asOf);
-  const ws = newSheet(wb, "Stock & Utilisation", "Stock & Utilisation - " + date, `Utilisation = in use / (in use + in stock). ` +
-    `Stock age from ${ctx.stockAgeSource || "(not available)"}; deployments from ${ctx.deploySource || "(not available)"}. ` +
-    `Cover = in stock / deployments per month.`);
-  const utilHeader = (g: string[]) => g.concat(UTIL_COLS);
-  const utilOpts = (n: number): TableOpts => ({ widths: new Array<number>(n).fill(130).concat([65, 65, 75, 60, 60, 60, 60, 70, 70, 75, 75, 70, 80, 330]),
-    pct: [n + 2], num: [n + 9, n + 10], count: [n, n + 1], bars: [n + 1], wrap: [n + 13] });
-  let r = sectionTitle(ws, 3, "By market and asset type");
-  r = addTable(ws, r, "UtilType", utilHeader(["Market", "Asset Type"]), utilisationRows(ctx, assets, a => [a.market, a.assetClass]), utilOpts(2));
-  if (ctx.cols.has("location")) {
-    r = sectionTitle(ws, r, "Move stock before buying", "Sites with a shortage and the site in the same market with the most surplus of that type");
-    r = addTable(ws, r, "Moves", ["Market", "Asset Type", "Site Short of Stock", "Its Stock", "Its Deployments / Month", "Units Needed (1 month)",
-      "Site with Surplus", "Surplus Stock", "Suggestion"], moveSuggestions(ctx), { widths: [120, 100, 180, 65, 85, 85, 180, 70, 300], wrap: [8] });
-    r = sectionTitle(ws, r, "By site and asset type (most stock first)");
-    r = addTable(ws, r, "UtilSite", utilHeader(["Market", "Site", "Asset Type"]), utilisationRows(ctx, assets, a => [a.market, a.location || "(no location)", a.assetClass]).slice(0, 300), utilOpts(3));
+  const monthly = ctx.recon.available;
+  const ws = newSheet(wb, "Stock & Utilisation", "Stock Utilization - Notebooks and Headsets - " + monthName(ctx.period),
+    "Utilization = in use / (in use + in stock). In stock = In stock, Reserved, Ready for use, To install, Building. " +
+    "Headsets = type Headset + headset models under Zubehör-Client.");
+  backLink(ws);
+  const sum = stockSummary(ctx);
+  let r = sectionTitle(ws, 4, "1. Summary", monthly ? "Deployed this month = moved to In operation since the previous export; " +
+    "months of cover = in stock / deployed this month" : "Deployments need the previous export");
+  const coverOf = (x: StockRow): Cell => x.deployed ? x.stock / x.deployed : "";
+  r = addTable(ws, r, "tblStockSummary", ["Category", "In Use", "In Stock", "Utilization", "Deployed This Month", "Months of Cover"],
+    sum.map(x => [x.label, x.use, x.stock, utilOf(x), monthly ? x.deployed : "", monthly ? coverOf(x) : ""]),
+    { widths: [260, 110, 90, 90, 110, 100, 100], count: [1, 2, 4], pct: [3], num: [5], bars: [3] });
+  ws.getRangeByIndexes(r - 3 - sum.length + 2, 0, 1, 6).getFormat().getFont().setBold(true);
+  ws.getRangeByIndexes(r - 3 - sum.length + 1, 0, 1, 6).getFormat().getFont().setBold(true);
+  // Per model, most stock first
+  const byModel = (group: string): Cell[][] => Array.from(groupBy(ctx.assets.filter(a => stockGroup(a) === group &&
+    (a.stage === IN_USE || a.stage === STOCK)), a => a.assetClass + "\u0001" + (a.model || "(no model)")).entries()).map(e => {
+    const [cls, model] = e[0].split("\u0001"), use = e[1].filter(a => a.stage === IN_USE), st = e[1].filter(a => a.stage === STOCK).length;
+    const dep = deployRate(use, ctx);
+    return [model, cls, use.length, st, use.length + st ? use.length / (use.length + st) : "", monthly ? dep : "", monthly && dep ? st / dep : ""] as Cell[];
+  }).sort((x, y) => (y[3] as number) - (x[3] as number) || (y[2] as number) - (x[2] as number)).slice(0, 100);
+  const modelHeader = ["Model", "Asset Type", "In Use", "In Stock", "Utilization", "Deployed This Month", "Months of Cover"];
+  const modelOpts: TableOpts = { widths: [260, 110, 90, 90, 110, 100, 100], count: [2, 3, 5], pct: [4], num: [6] };
+  r = sectionTitle(ws, r, "2. Notebooks by model", "Most stock first");
+  r = addTable(ws, r, "tblStockNotebookModels", modelHeader, byModel(STOCK_NOTEBOOKS), modelOpts);
+  r = sectionTitle(ws, r, "3. Headsets by model", "Type Headset and headset models under Zubehör-Client; most stock first");
+  addTable(ws, r, "tblStockHeadsetModels", modelHeader, byModel(STOCK_HEADSETS), modelOpts);
+}
+
+// Pivot & Summary: key figures (linked to the detail tabs), the summary by type, status changes, new-asset breakdowns
+// and the three PivotTables, each under its own numbered heading.
+//   Columns A-E: 1 Key figures, 2 Assets by type, 3 Status changes | G-H: 4-7 New assets | J.., M.., P..: 8-10 PivotTables
+function buildSummarySheet(wb: ExcelScript.Workbook, ctx: Ctx, notes: string[]): void {
+  progress("Writing Pivot & Summary");
+  const rc = ctx.recon, prevName = monthName(rc.prevPeriod), curName = monthName(rc.curPeriod);
+  const live = ctx.formulas && ctx.prevTabs.length === 1 && ctx.curTabs.length === 1 && ctx.prevTabs[0].colAbs.cls !== undefined &&
+    ctx.curTabs[0].colAbs.cls !== undefined;
+  const ws = newSheet(wb, SUMMARY_SHEET, `Monthly Asset Summary - ${prevName} vs ${curName}`, "Key figures link to the detail tabs " +
+    "(click Open ›). " + (live ? "Counts by type are live formulas on the two export tabs." : "Counts calculated by the script."));
+  [[0, 300], [1, 120], [2, 110], [3, 120], [4, 110], [5, 24], [6, 200], [7, 110], [8, 24], [9, 200], [10, 110], [11, 24],
+    [12, 260], [13, 110], [14, 24], [15, 180], [16, 110]].forEach(w => ws.getRangeByIndexes(0, w[0], 1, 1).getFormat().setColumnWidth(w[1]));
+  const at = (row: number) => `${SUMMARY_SHEET}!A${row + 1}`;
+
+  // --- 2 Assets by type (built first: the key figures point at its grand total); placed after section 1
+  const types = new Map<string, string>();
+  VCAMS_TYPES.forEach(t => types.set(t[0], t[1]));
+  Array.from(rc.prevByType.keys()).concat(Array.from(rc.curByType.keys())).forEach(t => {
+    if (!types.has(t)) { const ty = typeOf(t, "", ctx.maps); types.set(t, ty.group); }
+  });
+  const rows: Cell[][] = [], kinds: string[] = [];
+  VALUE_GROUPS.forEach(g => {
+    const list = Array.from(types.keys()).filter(t => types.get(t) === g);
+    if (!list.length || (g === UNLISTED && !list.some(t => rc.prevByType.get(t) || rc.curByType.get(t)))) { return; }
+    rows.push([`${g.toUpperCase()} ASSETS`, "", "", "", ""]); kinds.push("group");
+    list.forEach(t => {
+      const p = rc.prevByType.get(t) || 0, c = rc.curByType.get(t) || 0;
+      rows.push([t, p, c - p, c, live ? "OK" : ""]); kinds.push("type");
+    });
+    const p = list.reduce((sm, t) => sm + (rc.prevByType.get(t) || 0), 0), c = list.reduce((sm, t) => sm + (rc.curByType.get(t) || 0), 0);
+    rows.push([`${g} total`, p, c - p, c, ""]); kinds.push("total");
+  });
+  rows.push(["Grand total", rc.prevRows, rc.curRows - rc.prevRows, rc.curRows, live ? "OK" : ""]); kinds.push("grand");
+
+  // --- 1 Key figures: [label, value, formula (or ""), number format, link target (or "")]
+  const scrapped = rc.operational.filter(c => compactKey(c.cur.status) === "scrapped").length;
+  const ended = (st: string) => rc.changes.filter(c => compactKey(c.cur.status) === st).length;
+  const po = poReconRows(ctx), sum = stockSummary(ctx);
+  const keyTop = 5, sumTitle = keyTop + 18, sumTop = sumTitle + 2, grandRow = sumTop + 1 + rows.length;  // 0-based
+  const trTitle = grandRow + 3;
+  const key: [string, Cell, string, string, string][] = [
+    [`Previous-month total assets (${prevName})`, rc.prevRows, `=B${grandRow}`, FMT_COUNT, at(grandRow - 1)],
+    [`Current-month total assets (${curName})`, rc.curRows, `=D${grandRow}`, FMT_COUNT, at(grandRow - 1)],
+    ["Net movement", rc.curRows - rc.prevRows, `=B${keyTop + 3}-B${keyTop + 2}`, FMT_DIFF, at(grandRow - 1)],
+    ["New assets", rc.newAssets.length, `=COUNTIF(tblNewAssets[Asset Type],"?*")`, FMT_COUNT, "New Assets"],
+    ["   of which with an empty PurchaseNo", rc.newAssets.filter(a => !a.po).length,
+      `=COUNTIFS(tblNewAssets[Asset Type],"?*",tblNewAssets[PurchaseNo],"")`, FMT_COUNT, "New Assets"],
+    ["Removed assets (to review)", rc.removed.length, rc.removed.length ? `=COUNTIF(tblRemovedAssets[Asset Type],"?*")` : "", FMT_COUNT,
+      rc.removed.length ? "Removed Assets" : ""],
+    ["Serial number changes", rc.serialChecked ? rc.serialChanges.length : "Not checked",
+      rc.serialChecked ? `=COUNTIF(tblSerialChanges[Change],"?*")` : "", FMT_COUNT, rc.serialChecked ? "Serial Number Changes" : ""],
+    ["All status changes", rc.changes.length, "=SUM(tblStatusTransitions[Assets])", FMT_COUNT, at(trTitle)],
+    ["Scrapped (new this month)", scrapped, `=COUNTIF(tblStatusChanges[Current Asset Status],"Scrapped")`, FMT_COUNT, "Scrap & Inactive Assets"],
+    ["Inactive (new this month)", ended("inactive"), `=SUMIFS(tblStatusTransitions[Assets],tblStatusTransitions[Status Change],"*→ Inactive")`, FMT_COUNT, at(trTitle)],
+    ["Lost (new this month)", ended("lost"), `=COUNTIF(tblStatusChanges[Current Asset Status],"Lost")`, FMT_COUNT, "Scrap & Inactive Assets"],
+    ["Stolen (new this month)", ended("stolen"), `=SUMIFS(tblStatusTransitions[Assets],tblStatusTransitions[Status Change],"*→ Stolen")`, FMT_COUNT, at(trTitle)],
+    ["PO lines not 'Matched'", po.filter(x => x[7] !== PO_RESULTS.matched).length,
+      `=COUNTIF(tblPOReconciliation[Reconciliation Result],"?*")-COUNTIF(tblPOReconciliation[Reconciliation Result],"Matched")`, FMT_COUNT, PO_SHEET],
+    ["Notebook stock utilization", utilOf(sum[0]), "=INDEX(tblStockSummary[Utilization],1)", "0.0%", "Stock & Utilisation"],
+    ["Headset stock utilization", utilOf(sum[1]), "=INDEX(tblStockSummary[Utilization],2)", "0.0%", "Stock & Utilisation"]
+  ];
+  let r = sectionTitle(ws, 3, "1. Key figures", "Live: each value is a formula on the detail tab it links to");
+  addTable(ws, r, "tblKeyFigures", ["Measure", "Value", "Details"], key.map(k => [k[0], k[1], ""]), { widths: [] });
+  key.forEach((k, i) => {
+    const cell = ws.getRangeByIndexes(r + 1 + i, 1, 1, 1);
+    cell.setNumberFormat(k[3]);
+    if (k[2] && ctx.formulas) { cell.setFormulas([[k[2]]]); }
+    if (k[4]) { link(ws, r + 1 + i, 2, k[4].indexOf("!") > 0 ? "See below ›" : `Open ${k[4]} ›`, k[4]); }
+  });
+  ws.getRangeByIndexes(r + 1, 1, key.length, 1).getFormat().getFont().setBold(true);
+
+  // --- 2 Assets by type
+  r = sectionTitle(ws, sumTitle, `2. Assets by type - ${prevName} vs ${curName}`, "High value / Low value / Other, every listed type even when zero" +
+    (live ? "; 'Check' compares the live count with the script's count" : ""));
+  addTable(ws, r, "tblAssetSummary", ["Asset Type", `${prevName} Assets`, "Difference", `${curName} Assets`, "Check"], rows,
+    { widths: [], count: [1, 3], diff: [2] });
+  const top = r + 1;
+  kinds.forEach((k, i) => {
+    const line = ws.getRangeByIndexes(top + i, 0, 1, 5).getFormat();
+    if (k !== "type") { line.getFont().setBold(true); }
+    if (k === "group") { line.getFill().setColor("#F2F2F2"); }
+    if (k === "total") { line.getFill().setColor("#FCE4E4"); }
+    if (k === "grand") { line.getFill().setColor("#F4B6B6"); }
+  });
+  // Live formulas on the raw tabs (one tab per export, all markets, real values only)
+  if (live) {
+    const rangeOf = (t: TabInfo) => `'${t.name.replace(/'/g, "''")}'!$${colLetter(t.colAbs.cls)}$${t.headerAbs + 2}:$${colLetter(t.colAbs.cls)}$${Math.max(t.lastAbs + 1, t.headerAbs + 2)}`;
+    const pr = rangeOf(ctx.prevTabs[0]), cr = rangeOf(ctx.curTabs[0]);
+    let groupStart = -1;
+    kinds.forEach((k, i) => {
+      const row = top + i + 1;
+      if (k === "group") { groupStart = row + 1; return; }
+      if (k === "type") {
+        const v = rows[i];
+        ws.getRangeByIndexes(top + i, 1, 1, 4).setFormulas([[`=SUMPRODUCT(--(TRIM(${pr})=$A${row}))`, `=D${row}-B${row}`,
+          `=SUMPRODUCT(--(TRIM(${cr})=$A${row}))`, `=IF(AND(B${row}=${v[1]},D${row}=${v[3]}),"OK","Differs")`]]);
+      } else if (k === "total") {
+        ws.getRangeByIndexes(top + i, 1, 1, 3).setFormulas([[`=SUM(B${groupStart}:B${row - 1})`, `=D${row}-B${row}`, `=SUM(D${groupStart}:D${row - 1})`]]);
+      } else if (k === "grand") {
+        const totals = kinds.map((x, j) => x === "total" ? top + j + 1 : 0).filter(x => x);
+        ws.getRangeByIndexes(top + i, 1, 1, 4).setFormulas([[`=${totals.map(x => "B" + x).join("+")}`, `=D${row}-B${row}`,
+          `=${totals.map(x => "D" + x).join("+")}`, `=IF(AND(B${row}=${rc.prevRows},D${row}=${rc.curRows}),"OK","Differs")`]]);
+      }
+    });
+    notes.push("Pivot & Summary uses live SUMPRODUCT formulas on the raw export tabs");
   }
-  r = sectionTitle(ws, r, "In-stock models (most stock first)", "Deploy the oldest units first; dispose units beyond their life");
-  const inUseByModel = groupBy(assets.filter(a => a.stage === IN_USE), a => a.market + "\u0001" + a.model);
-  const stockModels: Cell[][] = Array.from(groupBy(assets.filter(a => a.stage === STOCK), a => [a.market, a.assetClass, a.model || "(no model)"].join("\u0001")).entries())
-    .map(e => {
-      const [market, cls, model] = e[0].split("\u0001"), list = e[1];
-      const deployed = deployRate(inUseByModel.get(market + "\u0001" + list[0].model) || [], ctx);
-      const ages = list.map(a => stockAge(a, ctx)).filter(x => x >= 0);
-      return [market, cls, model, list.length, ages.length ? ages.reduce((m, x) => Math.max(m, x), 0) : "", list.filter(a => stockAge(a, ctx) > SETTINGS.stockAgedDays).length,
-        list.filter(a => hasFlag(a, "STOCK_OVER_AGE")).length, Math.round(deployed * 10) / 10, coverMonths(list.length, deployed),
-        Array.from(new Set<string>(list.map(a => a.location || "(no location)"))).slice(0, 5).join(", "), stockVerdict(list.length, deployed,
-          list.filter(a => stockAge(a, ctx) > SETTINGS.stockAgedDays).length, ctx)] as Cell[];
-    }).sort((a, b) => (b[3] as number) - (a[3] as number)).slice(0, 300);
-  r = addTable(ws, r, "StockModels", ["Market", "Asset Type", "Model", "In Stock", "Oldest (days)", "Aged", "Beyond Life", "Same Model Deployed / Month",
-    "Months of Cover", "Sites", "What It Means"], stockModels, { widths: [120, 100, 200, 65, 75, 60, 70, 90, 75, 260, 330], num: [7, 8], wrap: [9, 10] });
-  r = sectionTitle(ws, r, "Stock by status detail", "In repair and in transit are not available stock");
-  addTable(ws, r, "StockStages", ["Market", "In Stock", "In Repair", "On Order / In Transit", `In Repair > ${SETTINGS.repairMaxDays}d`, `On Order / Transit > ${SETTINGS.transitMaxDays}d`],
-    ctx.markets.map(m => {
-      const ms = assets.filter(a => a.market === m);
-      return [m, ms.filter(a => a.stage === STOCK).length, ms.filter(a => a.stage === REPAIR).length, ms.filter(a => a.stage === TRANSIT).length,
-        ms.filter(a => hasFlag(a, "LONG_IN_REPAIR")).length, ms.filter(a => hasFlag(a, "LONG_IN_TRANSIT")).length];
-    }), { widths: [150, 70, 70, 70, 90, 90] });
+
+  // --- 3 Status changes
+  r = sectionTitle(ws, trTitle, `3. Status changes since ${prevName}`, `${fmtNum(rc.changes.length)} in total; only changes ending in ` +
+    `${OPERATIONAL_STATUSES.join(" or ")} are listed on Scrap & Inactive Assets (${fmtNum(rc.operational.length)})`);
+  const tr = countBy(rc.changes.map(c => c.transition));
+  addTable(ws, r, "tblStatusTransitions", ["Status Change", "Assets", "On Scrap & Inactive Assets?"], keysByCount(tr).map(t =>
+    [t, tr.get(t) || 0, OPERATIONAL_STATUSES.some(st => t.endsWith("→ " + st)) ? "Yes" : "No"]), { widths: [], count: [1] });
+
+  // --- 4-7 New assets (columns G-H)
+  const by = (f: (a: Asset) => string) => { const m = countBy(rc.newAssets.map(a => f(a))); return keysByCount(m).map(k => [k, m.get(k) || 0] as Cell[]); };
+  r = sectionTitle(ws, 3, "4. New assets by type", `${fmtNum(rc.newAssets.length)} new assets`, 6);
+  r = addTable(ws, r, "tblNewByType", ["Asset Type", "New Assets"], by(a => a.assetClass), { widths: [], count: [1], col: 6 });
+  r = sectionTitle(ws, r, "5. New assets by PurchaseNo", "", 6);
+  r = addTable(ws, r, "tblNewByPO", ["PurchaseNo", "New Assets"], by(a => a.po || "(empty)"), { widths: [], text: [0], count: [1], col: 6 });
+  r = sectionTitle(ws, r, "6. PurchaseNo filled or empty", "", 6);
+  r = addTable(ws, r, "tblNewByPOFilled", ["PurchaseNo", "New Assets"], by(a => a.po ? "Filled" : "Empty"), { widths: [], count: [1], col: 6 });
+  r = sectionTitle(ws, r, "7. New assets by model", "Top 100", 6);
+  addTable(ws, r, "tblNewByModel", ["Model", "New Assets"], by(a => a.model || "(empty)").slice(0, 100), { widths: [], count: [1], col: 6 });
+
+  // --- 8-10 PivotTables (rebuilt every run; skipped, with a note, when the source table is empty). The source table is
+  // looked up by name (Office Scripts does not allow keeping Excel objects in variables for later)
+  const pivot = (title: string, name: string, tableName: string, n: number, col: number, rowsBy: string[], value: string, sum: boolean) => {
+    sectionTitle(ws, 3, title, `From ${tableName}; right-click > Refresh after editing it`, col);
+    const table = wb.getTable(tableName);
+    if (!table || !n) {
+      putValues(ws, 5, col, [["Nothing to show this month (the table is empty)."]]);
+      notes.push(`${name} not created - its table is empty`);
+      return;
+    }
+    try {
+      const pt = ws.addPivotTable(name, table, ws.getRangeByIndexes(5, col, 1, 1));
+      rowsBy.forEach(h => { const hier = pt.getHierarchy(h); if (hier) { pt.addRowHierarchy(hier); } });
+      const valueHier = pt.getHierarchy(value);
+      if (!valueHier) { notes.push(`${name}: column '${value}' not found`); return; }
+      const dh = pt.addDataHierarchy(valueHier);
+      dh.setSummarizeBy(sum ? ExcelScript.AggregationFunction.sum : ExcelScript.AggregationFunction.count);
+      notes.push(`${name} created on ${SUMMARY_SHEET}!${colLetter(col)}6`);
+    } catch (e) {
+      putValues(ws, 5, col, [["PivotTable could not be created; the tables on the left hold the same counts."]]);
+      notes.push(`${name} could not be created (${String(e).slice(0, 120)})`);
+    }
+  };
+  pivot("8. PivotTable - new assets by type", "NewAssetsPivot", "tblNewAssets", rc.newAssets.length, 9, ["Asset Type"], "Asset no.", false);
+  pivot("9. PivotTable - Scrapped / Lost by type and model", "StatusChangesPivot", "tblStatusChanges", rc.operational.length, 12,
+    ["Current Asset Status", "Asset Type", "Model"], "Asset no.", false);
+  pivot("10. PivotTable - PO quantities", "POValidationsPivot", "tblPOValidated", ctx.po.rows.length, 15, ["Purchase Number", "Model"], "Quantity", true);
 }
 
 function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
@@ -2474,11 +2655,15 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
   const oldSummary = wb.getWorksheet(SUMMARY_SHEET);
   if (oldSummary) { oldSummary.delete(); }
   const reconSheets = ["New Assets", "Removed Assets", "Serial Number Changes", "Scrap & Inactive Assets", "Quality Checks"];
+  // Order matters: the summary's formulas and PivotTables point at the detail and stock tables, so those come first
   if (ctx.recon.available) {
     const notes = buildReconSheets(wb, ctx);
+    buildStockSheet(wb, ctx);
+    buildSummarySheet(wb, ctx, notes);
     if (notes.length) { ctx.runInfo.push(["PivotTables and formulas", notes.join("; ")]); }
     buildEmailSheet(wb, ctx);
   } else {
+    buildStockSheet(wb, ctx);
     reconSheets.concat([EMAIL_SHEET]).forEach(n => { const w = wb.getWorksheet(n); if (w) { w.delete(); } });
     // The user's PO data is kept on its sheet even without a previous export
     if (ctx.po.rows.length) {
@@ -2488,7 +2673,6 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
     }
   }
   if (REPORT_ONLY) {
-    buildStockSheet(wb, ctx);
     // Tabs that earlier (full audit) runs added are removed; the export tabs and Mappings stay
     SHEETS.filter(n => REPORT_SHEETS.indexOf(n) < 0).forEach(n => { const w = wb.getWorksheet(n); if (w) { w.delete(); } });
     REPORT_SHEETS.forEach((name, i) => { const w = wb.getWorksheet(name); if (w) { w.setPosition(i); } });
@@ -2682,8 +2866,7 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
     .map(d => [d.name, d.serial, fmtDay(d.lastSeen), d.lastSeen ? daysSince(d.lastSeen, ctx.asOf) : "", d.user, d.market] as Cell[])
     .sort((a, b) => (a[3] === "" ? 1e9 : a[3] as number) - (b[3] === "" ? 1e9 : b[3] as number)).slice(0, 20000), { widths: [150, 140, 90, 70, 220, 120] });
 
-  // --- 9 Stock & Utilisation
-  buildStockSheet(wb, ctx);
+  // --- 9 Stock & Utilisation: written above, before the summary
 
   // --- 10 Lifecycle
   progress("Writing Lifecycle");
@@ -2865,7 +3048,8 @@ function buildEmailSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
     "add your name. Check the numbers against Pivot & Summary before sending.");
   ws.getRangeByIndexes(0, 0, 1, 1).getFormat().setColumnWidth(30);
   ws.getRangeByIndexes(0, 1, 1, 1).getFormat().setColumnWidth(900);
-  let r = 3;
+  link(ws, 2, 0, "Open Pivot & Summary ›", SUMMARY_SHEET);
+  let r = 4;
   const block = (title: string, how: string, lines: string[], bold: number[]): number => {
     putValues(ws, r, 0, [[title, ""], ["", how]]);
     const f = ws.getRangeByIndexes(r, 0, 1, 1).getFormat().getFont();
@@ -2914,6 +3098,7 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
   progress("Writing New Assets");
   let ws = newSheet(wb, "New Assets", `New Assets - ${curName}`, `In the ${curName} export but not in the ${prevName} export ` +
     `(matched on Asset no.): ${rc.newAssets.length}. ${rc.newAssets.filter(a => !a.po).length} have a blank PurchaseNo.`);
+  backLink(ws);
   const newRows = rc.newAssets.slice().sort((a, b) => a.assetClass.localeCompare(b.assetClass) || a.po.localeCompare(b.po) ||
     a.assetId.localeCompare(b.assetId)).map(a => newAssetRow(a));
   addTable(ws, 3, "tblNewAssets", NEW_HEADER, newRows, { widths: widths13, text: [0, 1, 6, 9], date: [5], datetime: [7, 10, 12],
@@ -2924,6 +3109,7 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
   if (rc.removed.length) {
     ws = newSheet(wb, "Removed Assets", `Removed Assets - ${curName}`, `In the ${prevName} export but missing from the ${curName} ` +
       `export: ${rc.removed.length}. Not automatically scrapped - each needs review.`);
+    backLink(ws);
     addTable(ws, 3, "tblRemovedAssets", REMOVED_HEADER, rc.removed.map(a => [a.assetId, a.serial, a.status, a.assetClass, a.model,
       dateSerial(a.purchase), a.po, dateSerial(a.lastSeen), a.functionUnit, dateSerial(a.created), dateSerial(a.updated), "Review required",
       "Missing from current export" + (rc.fromSnapshot ? " (details beyond status, type, model and PO are in the previous month's file)" : "")]),
@@ -2939,6 +3125,7 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
     ws = newSheet(wb, "Serial Number Changes", `Serial Number Changes - ${curName}`, `Assets in both exports whose Serial no. differs ` +
       `from ${prevName} (case, spaces and punctuation ignored; placeholders such as N/A count as blank): ${rc.serialChanges.length}. ` +
       mapList(countBy(rc.serialChanges.map(c => c.change)), 3));
+    backLink(ws);
     addTable(ws, 3, "tblSerialChanges", ["Asset no.", "Previous Serial no.", "Current Serial no.", "Change", "Asset status", "Asset Type",
       "Model", "PurchaseNo", "Function Unit", "AssetUpdateDate"], rc.serialChanges.map(c => [c.cur.assetId, c.prev.serial, c.cur.serial,
       c.change, c.cur.status, c.cur.assetClass, c.cur.model, c.cur.po, c.cur.functionUnit, dateSerial(c.cur.updated)]),
@@ -2954,6 +3141,7 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
   ws = newSheet(wb, "Scrap & Inactive Assets", `Scrap & Inactive Assets - ${curName}`, `Assets whose status changed to ` +
     `${OPERATIONAL_STATUSES.join(" or ")} since ${prevName}: ${rc.operational.length} (Scrapped ${scrapped}, Lost ` +
     `${rc.operational.length - scrapped}). ${rc.changes.length - rc.operational.length} other status changes are excluded (see Pivot & Summary).`);
+  backLink(ws);
   addTable(ws, 3, "tblStatusChanges", CHANGE_HEADER, rc.operational.map(c => [c.cur.assetId, c.cur.serial, c.cur.status, c.prev.status,
     c.transition, c.cur.assetClass, c.cur.model, dateSerial(c.cur.purchase), c.cur.po, dateSerial(c.cur.lastSeen), c.cur.functionUnit,
     dateSerial(c.cur.created), dateSerial(c.cur.updated)]), { widths: [110, 110, 110, 120, 200, 110, 150, 95, 110, 120, 100, 120, 120],
@@ -2964,107 +3152,23 @@ function buildReconSheets(wb: ExcelScript.Workbook, ctx: Ctx): string[] {
   ws = newSheet(wb, PO_SHEET, `POs Validated - ${curName}`, ctx.po.source ? `Supplied by the user (${ctx.po.source}); values kept exactly as ` +
     "supplied. Edit the table and run the script again to re-check." : "No PO validation supplied yet. Type the user's rows into this table " +
     "(or give them to the agent) and run again. Nothing here is ever filled in automatically.");
-  let r = addTable(ws, 3, "tblPOValidated", PO_HEADERS, ctx.po.rows.map(p => [p.date, p.number, p.model, p.quantity, p.raisedBy, p.physical, p.spider]),
+  backLink(ws);
+  let r = sectionTitle(ws, 4, "1. PO validation rows (supplied by you)", "Your data, kept exactly as supplied; edit it here and run the script again");
+  r = addTable(ws, r, "tblPOValidated", PO_HEADERS, ctx.po.rows.map(p => [p.date, p.number, p.model, p.quantity, p.raisedBy, p.physical, p.spider]),
     { widths: [110, 150, 150, 90, 130, 150, 130], text: [1], date: [0], count: [3], blankRow: true });
-  r = sectionTitle(ws, r, "PO reconciliation", "Quantity Variance = User-Provided Quantity - Export Asset Count (new assets this month)");
+  r = sectionTitle(ws, r, "2. PO reconciliation", "Quantity Variance = User-Provided Quantity - Export Asset Count (new assets this month)");
   const poRows = poReconRows(ctx);
   r = addTable(ws, r, "tblPOReconciliation", PO_RECON_HEADER, poRows, { widths: [150, 150, 90, 100, 90, 150, 130, 190], text: [0],
     count: [2, 3], diff: [4] });
   const flags: string[][] = [];
-  poRows.filter(x => x[7] === PO_RESULTS.notFound).forEach(x => flags.push(["Supplied PO not found among new assets", String(x[0])]));
-  poRows.filter(x => x[7] === PO_RESULTS.missing).forEach(x => flags.push(["New-asset PO without complete validation", String(x[0]) || "(blank)"]));
+  poRows.filter(x => x[7] === PO_RESULTS.notFound).forEach(x => flags.push(["PO not found among new assets", String(x[0])]));
+  poRows.filter(x => x[7] === PO_RESULTS.missing).forEach(x => flags.push(["PO without complete validation", String(x[0])]));
   poRows.filter(x => x[7] === PO_RESULTS.variance).forEach(x => flags.push(["Quantity difference", `${x[0]}: ${signed(x[4] as number)}`]));
-  openValidations(ctx).filter(x => x.indexOf("no validation supplied") < 0).forEach(x => flags.push(["Pending, failed or missing approval", x]));
-  poRows.filter(x => x[7] === PO_RESULTS.blank).forEach(x => flags.push(["New assets with blank PurchaseNo", String(x[2])]));
-  ctx.po.problems.forEach(p => flags.push(["PO data to complete or correct", p]));
-  if (flags.length) { r = sectionTitle(ws, r, "Flags for manual review"); r = textRows(ws, r, flags); }
-
-  // --- Pivot & Summary
-  progress("Writing Pivot & Summary");
-  ws = newSheet(wb, SUMMARY_SHEET, `Monthly Asset Summary - ${prevName} vs ${curName}`, ctx.formulas && ctx.prevTabs.length === 1 &&
-    ctx.curTabs.length === 1 ? "Counts are live formulas on the raw export tabs; 'Check' compares them with the script's count" :
-    "Counts calculated by the script");
-  const types = new Map<string, string>();
-  VCAMS_TYPES.forEach(t => types.set(t[0], t[1]));
-  Array.from(rc.prevByType.keys()).concat(Array.from(rc.curByType.keys())).forEach(t => {
-    if (!types.has(t)) { const ty = typeOf(t, "", ctx.maps); types.set(t, ty.group); }
-  });
-  const rows: Cell[][] = [], kinds: string[] = [];
-  VALUE_GROUPS.forEach(g => {
-    const list = Array.from(types.keys()).filter(t => types.get(t) === g);
-    if (!list.length || (g === UNLISTED && !list.some(t => rc.prevByType.get(t) || rc.curByType.get(t)))) { return; }
-    rows.push([`${g.toUpperCase()} ASSETS`, "", "", "", ""]); kinds.push("group");
-    list.forEach(t => {
-      const p = rc.prevByType.get(t) || 0, c = rc.curByType.get(t) || 0;
-      rows.push([t, p, c - p, c, ""]); kinds.push("type");
-    });
-    const p = list.reduce((s, t) => s + (rc.prevByType.get(t) || 0), 0), c = list.reduce((s, t) => s + (rc.curByType.get(t) || 0), 0);
-    rows.push([`${g} total`, p, c - p, c, ""]); kinds.push("total");
-  });
-  rows.push(["Grand total", rc.prevRows, rc.curRows - rc.prevRows, rc.curRows, ""]); kinds.push("grand");
-  const top = 4;
-  r = addTable(ws, top - 1, "tblAssetSummary", ["Asset Type", `${prevName} Assets`, "Difference", `${curName} Assets`, "Check"], rows,
-    { widths: [200, 120, 100, 120, 90], count: [1, 3], diff: [2] });
-  kinds.forEach((k, i) => {
-    if (k !== "type") { ws.getRangeByIndexes(top + i, 0, 1, 5).getFormat().getFont().setBold(true); }
-    if (k === "group") { ws.getRangeByIndexes(top + i, 0, 1, 5).getFormat().getFill().setColor("#F2F2F2"); }
-  });
-  // Live formulas on the raw tabs (one tab per export, all markets, real values only)
-  if (ctx.formulas && ctx.prevTabs.length === 1 && ctx.curTabs.length === 1 && ctx.prevTabs[0].colAbs.cls !== undefined &&
-    ctx.curTabs[0].colAbs.cls !== undefined) {
-    const rangeOf = (t: TabInfo) => `'${t.name.replace(/'/g, "''")}'!$${colLetter(t.colAbs.cls)}$${t.headerAbs + 2}:$${colLetter(t.colAbs.cls)}$${Math.max(t.lastAbs + 1, t.headerAbs + 2)}`;
-    const pr = rangeOf(ctx.prevTabs[0]), cr = rangeOf(ctx.curTabs[0]);
-    let groupStart = -1;
-    kinds.forEach((k, i) => {
-      const row = top + i + 1;
-      if (k === "group") { groupStart = row + 1; return; }
-      if (k === "type") {
-        const v = rows[i];
-        ws.getRangeByIndexes(top + i, 1, 1, 4).setFormulas([[`=SUMPRODUCT(--(TRIM(${pr})=$A${row}))`, `=D${row}-B${row}`,
-          `=SUMPRODUCT(--(TRIM(${cr})=$A${row}))`, `=IF(AND(B${row}=${v[1]},D${row}=${v[3]}),"OK","Differs")`]]);
-      } else if (k === "total") {
-        ws.getRangeByIndexes(top + i, 1, 1, 3).setFormulas([[`=SUM(B${groupStart}:B${row - 1})`, `=D${row}-B${row}`, `=SUM(D${groupStart}:D${row - 1})`]]);
-      } else if (k === "grand") {
-        const totals = kinds.map((x, j) => x === "total" ? top + j + 1 : 0).filter(x => x);
-        ws.getRangeByIndexes(top + i, 1, 1, 4).setFormulas([[`=${totals.map(x => "B" + x).join("+")}`, `=D${row}-B${row}`,
-          `=${totals.map(x => "D" + x).join("+")}`, `=IF(AND(B${row}=${rc.prevRows},D${row}=${rc.curRows}),"OK","Differs")`]]);
-      }
-    });
-    notes.push("Pivot & Summary uses live SUMPRODUCT formulas on the raw export tabs");
-  }
-  r = sectionTitle(ws, r, "Status changes since " + prevName, `${rc.changes.length} in total; only changes ending in ` +
-    `${OPERATIONAL_STATUSES.join(" or ")} go to Scrap & Inactive Assets (${rc.operational.length}); the rest are excluded (${rc.changes.length - rc.operational.length})`);
-  const tr = countBy(rc.changes.map(c => c.transition));
-  r = addTable(ws, r, "tblStatusTransitions", ["Status Change", "Assets", "In Scrap & Inactive Assets?"], keysByCount(tr).map(t =>
-    [t, tr.get(t) || 0, OPERATIONAL_STATUSES.some(s => t.endsWith("→ " + s)) ? "Yes" : "No - excluded"]), { widths: [260, 90, 170], count: [1] });
-  r = sectionTitle(ws, r, "New assets", `By type, PurchaseNo and model; ${rc.newAssets.filter(a => !a.po).length} with a blank PurchaseNo`);
-  const by = (f: (a: Asset) => string) => { const m = countBy(rc.newAssets.map(a => f(a))); return keysByCount(m).map(k => [k, m.get(k) || 0] as Cell[]); };
-  r = addTable(ws, r, "tblNewByType", ["Asset Type", "New Assets"], by(a => a.assetClass), { widths: [200, 100], count: [1] });
-  r = addTable(ws, r, "tblNewByPO", ["PurchaseNo", "New Assets"], by(a => a.po || "(blank)"), { widths: [200, 100], text: [0], count: [1] });
-  r = addTable(ws, r, "tblNewByModel", ["Model", "New Assets"], by(a => a.model || "(blank)").slice(0, 100), { widths: [200, 100], count: [1] });
-  r = addTable(ws, r, "tblNewByPOFilled", ["PurchaseNo", "New Assets"], by(a => a.po ? "Populated" : "Blank"), { widths: [200, 100], count: [1] });
-
-  // PivotTables (refreshed by being rebuilt every run). Skipped for an empty source table.
-  // The source table is looked up by name (Office Scripts does not allow keeping Excel objects in variables for later)
-  const pivot = (name: string, tableName: string, n: number, dest: string, rowsBy: string[], value: string, sum: boolean) => {
-    const table = wb.getTable(tableName);
-    if (!table || !n) { notes.push(`${name} not created - its table is empty`); return; }
-    try {
-      const pt = ws.addPivotTable(name, table, ws.getRange(dest));
-      rowsBy.forEach(h => { const hier = pt.getHierarchy(h); if (hier) { pt.addRowHierarchy(hier); } });
-      const valueHier = pt.getHierarchy(value);
-      if (!valueHier) { notes.push(`${name}: column '${value}' not found`); return; }
-      const dh = pt.addDataHierarchy(valueHier);
-      dh.setSummarizeBy(sum ? ExcelScript.AggregationFunction.sum : ExcelScript.AggregationFunction.count);
-      notes.push(`${name} created on ${SUMMARY_SHEET}!${dest}`);
-    } catch (e) {
-      notes.push(`${name} could not be created (${String(e).slice(0, 120)}) - the script tables on this sheet hold the same counts`);
-    }
-  };
-  putValues(ws, 2, 7, [["PivotTables"]]);
-  pivot("NewAssetsPivot", "tblNewAssets", newRows.length, "H4", ["Asset Type"], "Asset no.", false);
-  pivot("StatusChangesPivot", "tblStatusChanges", rc.operational.length, "K4", ["Current Asset Status", "Asset Type", "Model"], "Asset no.", false);
-  pivot("POValidationsPivot", "tblPOValidated", ctx.po.rows.length, "O4", ["Purchase Number", "Model"], "Quantity", true);
+  openValidations(ctx).filter(x => x.indexOf("no validation supplied") < 0).forEach(x => flags.push(["Approval pending or missing", x]));
+  poRows.filter(x => x[7] === PO_RESULTS.blank).forEach(x => flags.push(["New assets with empty PurchaseNo", String(x[2])]));
+  ctx.po.problems.forEach(p => flags.push(["PO row to complete or correct", p]));
+  r = sectionTitle(ws, r, "3. Flags for manual review", flags.length ? `${flags.length} to review` : "Nothing to review");
+  addTable(ws, r, "tblPOFlags", ["Flag", "Details"], flags, { widths: [220], wrap: [1] });
 
   // --- Quality Checks (full audit only; the results are also in the flow result)
   if (REPORT_ONLY) { return notes; }

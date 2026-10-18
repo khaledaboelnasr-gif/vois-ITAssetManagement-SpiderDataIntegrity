@@ -40,18 +40,42 @@ class Range {
   getValues() { calls++; const v = this.ws.values.length ? this.ws.values : this.ws.grid(); return v.slice(this.r, this.r + this.h).map(r => r.slice(this.c, this.c + this.w).concat(Array(Math.max(0, this.w - (r.length - this.c))).fill(""))); }
   getRowIndex() { return this.r; } getColumnIndex() { return this.c; } getRowCount() { return this.h; } getColumnCount() { return this.w; }
   getAddress() { return `${this.ws.name}!R${this.r}C${this.c}`; }
-  setNumberFormat(f) { if (typeof f !== "string") throw new Error("setNumberFormat needs string"); }
-  getFormat() { return any; } addConditionalFormat() { return any; }
+  setNumberFormat(f) { if (typeof f !== "string") throw new Error("setNumberFormat needs string"); this.each(k => this.ws.style(k).nf = f); }
+  // Formatting is recorded per cell, for RENDER (a picture of each tab)
+  each(fn) { for (let i = 0; i < this.h; i++) for (let j = 0; j < this.w; j++) fn(`${this.r + i},${this.c + j}`); }
+  getFormat() {
+    const set = (prop, v) => this.each(k => this.ws.style(k)[prop] = v);
+    const font = { setBold: v => set("bold", v), setItalic: v => set("italic", v), setColor: v => set("color", v), setSize: v => set("size", v),
+      setUnderline: v => set("underline", v), setName() {} };
+    return wrap({ getFont: () => wrap(font), getFill: () => wrap({ setColor: v => set("fill", v) }), setWrapText: v => set("wrap", v),
+      setColumnWidth: v => { for (let j = 0; j < this.w; j++) this.ws.colW[this.c + j] = v; },
+      setVerticalAlignment() {}, setHorizontalAlignment: v => set("align", v) });
+  }
+  addConditionalFormat() { return any; }
+  setFormulas(f) { f.forEach((row, i) => row.forEach((x, j) => this.ws.style(`${this.r + i},${this.c + j}`).formula = x)); }
+  setHyperlink(h) { this.each(k => { this.ws.style(k).link = h.documentReference || h.address; }); if (h.textToDisplay) this.ws.cells.set(`${this.r},${this.c}`, h.textToDisplay); }
 }
 class Sheet {
-  constructor(name, values) { this.name = name; this.values = values || []; this.cells = new Map(); this.tables = []; }
+  constructor(name, values) { this.name = name; this.values = values || []; this.cells = new Map(); this.tables = []; this.fmt = new Map();
+    this.colW = {}; this.tableRanges = []; this.pivots = []; }
+  style(k) { let s = this.fmt.get(k); if (!s) { s = {}; this.fmt.set(k, s); } return s; }
   getName() { return this.name; }
   size() { let h = 0, w = 0; for (const k of this.cells.keys()) { const [r, c] = k.split(",").map(Number); h = Math.max(h, r + 1); w = Math.max(w, c + 1); } return [h, w]; }
   grid() { const [h, w] = this.size(); return Array.from({ length: h }, (_, r) => Array.from({ length: w }, (_, c) => { const v = this.cells.get(`${r},${c}`); return v === undefined ? "" : v; })); }
   getUsedRange() { if (this.values.length) return wrap(new Range(this, 0, 0, this.values.length, this.values[0].length)); const [h, w] = this.size(); return h ? wrap(new Range(this, 0, 0, h, w)) : undefined; }
   getRangeByIndexes(r, c, h, w) { if (h < 1 || w < 1) throw new Error(`empty range ${h}x${w} on ${this.name}`); return wrap(new Range(this, r, c, h, w)); }
   getRange(a) { const m = a.match(/^([A-Z]+)(\d+)$/); return wrap(new Range(this, +m[2] - 1, colIdx(m[1]), 1, 1)); }
-  addTable(rng) { const self = this; return wrap({ setName(n) { if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(n) || n.length > 255) throw new Error("bad table name " + n); if (wb.tableNames.has(n.toLowerCase())) throw new Error("dup table " + n); wb.tableNames.add(n.toLowerCase()); self.tables.push(n.toLowerCase()); }, setPredefinedTableStyle() {} }); }
+  addTable(rng) {
+    const self = this, box = { r: rng.r, c: rng.c, h: rng.h, w: rng.w, name: "" };
+    // Excel refuses a table that overlaps another table
+    this.tableRanges.forEach(t => { if (box.r < t.r + t.h && t.r < box.r + box.h && box.c < t.c + t.w && t.c < box.c + box.w) throw new Error(`table overlaps ${t.name} on ${this.name}`); });
+    this.tableRanges.push(box);
+    return wrap({ setName(n) { box.name = n; if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(n) || n.length > 255) throw new Error("bad table name " + n); if (wb.tableNames.has(n.toLowerCase())) throw new Error("dup table " + n); wb.tableNames.add(n.toLowerCase()); self.tables.push(n.toLowerCase()); }, setPredefinedTableStyle() {} }); }
+  addPivotTable(name, table, dest) {
+    const pv = { name, table: table.getName(), r: dest.r, c: dest.c, rows: [], value: "", sum: false };
+    this.pivots.push(pv);
+    return wrap({ getHierarchy: h => ({ h }), addRowHierarchy: x => { pv.rows.push(x.h); }, addDataHierarchy: x => { pv.value = x.h; return wrap({ setSummarizeBy: f => { pv.sum = f === "sum"; } }); } });
+  }
   getFreezePanes() { return any; } setPosition() {} setShowGridlines() {} setTabColor() {} activate() {}
   delete() { wb.sheets = wb.sheets.filter(s => s.name !== this.name); this.tables.forEach(n => wb.tableNames.delete(n)); }
 }
@@ -82,6 +106,7 @@ if (process.env.SNAPSHOT) {
     getWorksheet(n) { return this.sheets.find(s => s.name === n); }, addWorksheet(n) { const s = wrap(new Sheet(n)); this.sheets.push(s); return s; } };
   snapshot = load()(pwb, "2026-09-08", undefined, undefined, undefined, undefined, false, undefined, undefined, undefined, undefined, undefined, true).snapshot;
   console.log("snapshot chars", snapshot.length);
+  wb.tableNames.clear();  // the earlier run used its own workbook; its table names are not in this one
 }
 const run = () => load()(wb, process.env.AUDIT || "2026-10-08", undefined, histPath ? fs.readFileSync(histPath, "utf8") : undefined,
   process.env.MARKET, "leavers, stock", process.env.SHARE === "1", process.env.MAPPINGS, usersJson, devicesJson, poJson, snapshot, false);
@@ -117,3 +142,74 @@ if (process.env.SHARE !== "1" && !process.env.NORERUN) { // re-running on the sa
 const dump = (name, maxR, maxLen = 70) => { const w = wb.getWorksheet(name); console.log("=== " + name); if (!w) return;
   for (let r = 0; r < maxR; r++) { const out = []; for (let c = 0; c < 18; c++) { const v = w.cells.get(`${r},${c}`); if (v !== undefined && v !== "") out.push(String(v).slice(0, maxLen)); } if (out.length) console.log(r, out.join(" | ")); } };
 (process.env.DUMP || "").split(",").filter(x => x).forEach(x => { const [n, k] = x.split(":"); dump(n, +k || 25); });
+
+// RENDER=<dir>: an HTML picture of each result tab (formatting, links, tables, PivotTables); screenshot.mjs turns them into PNGs
+if (process.env.RENDER) {
+  const esc = v => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  const serialDate = (v, withTime) => { const d = new Date(Date.UTC(1899, 11, 30) + Math.round(v * 86400000));
+    const m = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getUTCMonth()];
+    return `${String(d.getUTCDate()).padStart(2, "0")}-${m}-${d.getUTCFullYear()}` + (withTime ? ` ${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}` : ""); };
+  const show = (v, nf) => {
+    if (typeof v !== "number" || !nf || nf === "@") return { t: v, color: "" };
+    if (/yyyy/.test(nf)) return { t: serialDate(v, /hh/.test(nf)), color: "" };
+    if (/%/.test(nf)) return { t: (v * 100).toFixed(1) + "%", color: "" };
+    const dec = /0\.0/.test(nf) ? 1 : 0, abs = Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+    if (/;/.test(nf)) { const pos = nf.split(";")[0]; const posRed = /^\[Red\]/.test(pos);
+      if (v > 0) return { t: "+" + abs, color: posRed ? "#C00000" : "#00843D" }; if (v < 0) return { t: "-" + abs, color: posRed ? "#00843D" : "#C00000" }; return { t: "0", color: "" }; }
+    return { t: (v < 0 ? "-" : "") + abs, color: "" };
+  };
+  // A PivotTable as Excel shows it (compact layout): nested row labels with counts or sums, then Grand Total
+  const pivotCells = (ws, pv) => {
+    const src = wb.sheets.map(x => [x, x.tableRanges.find(t => t.name === pv.table)]).find(x => x[1]);
+    const out = new Map(); if (!src) return out;
+    const [tws, t] = src, head = []; for (let j = 0; j < t.w; j++) head.push(tws.cells.get(`${t.r},${t.c + j}`));
+    const idx = h => head.indexOf(h), rows = [];
+    for (let i = 1; i < t.h; i++) { const r = []; for (let j = 0; j < t.w; j++) r.push(tws.cells.get(`${t.r + i},${t.c + j}`)); rows.push(r); }
+    const val = r => pv.sum ? (Number(r[idx(pv.value)]) || 0) : (r[idx(pv.value)] !== "" && r[idx(pv.value)] !== undefined ? 1 : 0);
+    let line = pv.r;
+    const put = (c, v, st) => { out.set(`${line},${c}`, { v, st }); };
+    put(pv.c, "Row Labels", "ph"); put(pv.c + 1, (pv.sum ? "Sum of " : "Count of ") + pv.value, "ph"); line++;
+    const walk = (list, level) => {
+      const groups = new Map(); list.forEach(r => { const k = String(r[idx(pv.rows[level])] || "(blank)"); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); });
+      [...groups.keys()].sort().forEach(k => { put(pv.c, " ".repeat(4 * level) + k, level < pv.rows.length - 1 ? "pg" : ""); put(pv.c + 1, groups.get(k).reduce((a, r) => a + val(r), 0), level < pv.rows.length - 1 ? "pg" : ""); line++;
+        if (level < pv.rows.length - 1) walk(groups.get(k), level + 1); });
+    };
+    walk(rows, 0); put(pv.c, "Grand Total", "ph"); put(pv.c + 1, rows.reduce((a, r) => a + val(r), 0), "ph");
+    return out;
+  };
+  fs.mkdirSync(process.env.RENDER, { recursive: true });
+  wb.sheets.filter(ws => !ws.values.length).forEach(ws => {
+    const piv = new Map(); ws.pivots.forEach(pv => pivotCells(ws, pv).forEach((x, k) => piv.set(k, x)));
+    let H = 0, W = 0; for (const k of [...ws.cells.keys(), ...piv.keys()]) { const [r, c] = k.split(",").map(Number); H = Math.max(H, r + 1); W = Math.max(W, c + 1); }
+    H = Math.min(H, +(process.env.RENDER_ROWS || 70));
+    const inTable = (r, c) => ws.tableRanges.find(t => r >= t.r && r < t.r + t.h && c >= t.c && c < t.c + t.w);
+    let html = `<html><head><meta charset="utf-8"><style>body{margin:0;font:11pt Calibri,Arial,sans-serif;background:#fff}table{border-collapse:collapse;table-layout:fixed}
+td{height:20px;padding:1px 4px;white-space:nowrap;overflow:visible;vertical-align:bottom;font-size:11pt}td.rh{background:#f3f3f3;color:#666;text-align:center;font-size:9pt;border:1px solid #ddd}
+th{background:#f3f3f3;color:#666;font-weight:normal;font-size:9pt;border:1px solid #ddd}.tb{border:1px solid #BFBFBF}.ph{background:#DDEBF7;font-weight:bold;border-top:1px solid #9BC2E6}.pg{font-weight:bold}</style></head><body>
+<div style="padding:4px 8px;background:#217346;color:#fff;font:bold 12px Arial">${esc(ws.name)}</div><table style="width:${32 + Array.from({ length: W }, (_, c) => Math.round((ws.colW[c] || 48) * 1.33)).reduce((x, y) => x + y, 0)}px"><tr><th style="width:32px"></th>`;
+    for (let c = 0; c < W; c++) html += `<th style="width:${Math.round((ws.colW[c] || 48) * 1.33)}px">${String.fromCharCode(65 + (c % 26))}</th>`;
+    html += "</tr>";
+    for (let r = 0; r < H; r++) {
+      html += `<tr><td class="rh">${r + 1}</td>`;
+      for (let c = 0; c < W; c++) {
+        const k = `${r},${c}`, st = ws.fmt.get(k) || {}, p = piv.get(k), t = inTable(r, c);
+        let v = ws.cells.get(k); if (v === undefined) v = ""; if (typeof v === "string" && v.startsWith("'")) v = v.slice(1);
+        const shown = p ? { t: typeof p.v === "number" ? p.v.toLocaleString("en-US") : p.v, color: "" } : show(v, st.nf);
+        const css = [];
+        if (t) { css.push("border:1px solid #BFBFBF"); if (r === t.r) css.push("font-weight:bold"); else if ((r - t.r) % 2 === 0) css.push("background:#F2F2F2"); }
+        if (st.fill) css.push(`background:${st.fill}`);
+        if (st.bold) css.push("font-weight:bold"); if (st.italic) css.push("font-style:italic");
+        if (st.color) css.push(`color:${st.color}`); if (shown.color) css.push(`color:${shown.color}`);
+        if (st.size) css.push(`font-size:${st.size}pt`); if (st.underline || st.link) css.push("text-decoration:underline");
+        if (st.wrap && t && r !== t.r) css.push("white-space:normal");
+        if (st.wrap && t && r === t.r) css.push("white-space:normal");
+        if (typeof v === "number" || p && typeof p.v === "number") css.push("text-align:right");
+        const cls = p && p.st ? ` class="${p.st}"` : "";
+        html += `<td${cls} style="${css.join(";")}"${st.formula ? ` title="${esc(st.formula)}"` : ""}>${esc(shown.t)}${st.formula ? '<sup style="color:#999;font-size:7pt">ƒ</sup>' : ""}</td>`;
+      }
+      html += "</tr>";
+    }
+    fs.writeFileSync(`${process.env.RENDER}/${ws.name.replace(/[^A-Za-z0-9]+/g, "_")}.html`, html + "</table></body></html>");
+  });
+  console.log("rendered to", process.env.RENDER);
+}

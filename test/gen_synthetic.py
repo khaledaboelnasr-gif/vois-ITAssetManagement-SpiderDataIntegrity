@@ -30,7 +30,7 @@ HEADER = STD + ([] if MINIMAL else EXTRA)
 TYPES = [  # type, weight, models, needs user, scanned
     ("Notebook", 30, ["Latitude 5440", "EliteBook 840 G9", "ThinkPad T14"], True, True),
     ("Desktop", 4, ["OptiPlex 7010"], True, True), ("Monitor", 14, ["P2422H", "E24 G5"], False, False),
-    ("Zubehör-Client", 4, ["WD19S Dock"], False, False), ("Headset", 10, ["Evolve2 40", "Blackwire 5220"], True, False),
+    ("Zubehör-Client", 4, ["WD19S Dock", "Headset_Jabra Evolve 20_VE", "Headset Blackwire 520"], False, False), ("Headset", 10, ["Evolve2 40", "Blackwire 5220"], True, False),
     ("Bag", 17, ["Example Bag"], False, False), ("Mouse", 6, ["MS116"], False, False), ("Mobile", 5, ["iPhone 14", "Galaxy A54"], True, False),
     ("Keyboard", 6, ["KB216"], False, False), ("IP Phone", 1, ["CP-8845"], False, False), ("VC Device", 0.5, ["Room Kit"], False, False),
     ("Printer", 0.5, ["Xerox C405"], False, False), ("Virtual Machine", 0.3, ["VM-Std"], False, False),
