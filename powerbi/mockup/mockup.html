@@ -1,0 +1,176 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Spider Data Integrity - Power BI mockup</title>
+<style>
+  :root { --red:#E60000; --teal:#0096AD; --orange:#EB9700; --violet:#9C2AA0; --ink:#262626; --ink2:#595959; --muted:#8C8C8C;
+          --line:#E6E6E6; --page:#F4F4F4; --card:#FFFFFF; --prev:#BFBFBF; --good:#2E7D32; --warn:#B26B00; --bad:#B00020; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:#ddd; font-family:"Segoe UI", Arial, sans-serif; color:var(--ink); }
+  .page { width:1280px; height:720px; min-height:720px; background:var(--page); margin:0 0 24px; position:relative; overflow:hidden; display:flex; flex-direction:column; }
+  header { height:64px; background:#fff; border-bottom:1px solid var(--line); display:flex; align-items:center; padding:0 24px; gap:16px; }
+  header .bar { width:6px; height:36px; background:var(--red); border-radius:3px; }
+  header .t { flex:1; } header h1 { margin:0; font-size:20px; font-weight:600; } header p { margin:2px 0 0; font-size:12px; color:var(--ink2); }
+  .pill { border:1px solid var(--line); border-radius:16px; padding:6px 14px; font-size:12px; color:var(--ink2); }
+  .logo { font-weight:700; letter-spacing:3px; font-size:18px; }
+  nav { display:flex; gap:4px; padding:8px 24px 0; }
+  nav span { font-size:12px; padding:6px 12px; border-radius:6px 6px 0 0; color:var(--ink2); }
+  nav span.on { background:#fff; color:var(--red); font-weight:600; border:1px solid var(--line); border-bottom:none; }
+  main { flex:1; min-height:0; padding:12px 24px 20px; display:grid; gap:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; overflow:hidden; position:relative; }
+  .card h3 { margin:0 0 6px; font-size:13px; font-weight:600; } .card h3 small { font-weight:400; color:var(--muted); margin-left:6px; }
+  .kpis { display:grid; gap:12px; }
+  .kpi .l { font-size:12px; color:var(--ink2); } .kpi .v { font-size:30px; font-weight:600; margin:2px 0; line-height:1.1; }
+  .kpi .s { font-size:11px; color:var(--ink2); } .up { color:var(--good); } .dn { color:var(--bad); }
+  .kpi.hero { border-top:3px solid var(--red); }
+  .att { list-style:none; margin:0; padding:0; font-size:13px; } .att li { display:flex; gap:10px; align-items:center; padding:7px 0; border-bottom:1px solid var(--line); }
+  .att li:last-child { border:0; } .att b { font-size:18px; min-width:48px; text-align:right; }
+  .chip { font-size:11px; padding:2px 8px; border-radius:10px; font-weight:600; }
+  .ok { background:#E6F2E7; color:var(--good); } .wa { background:#FFF2D9; color:var(--warn); } .ba { background:#FCE6E9; color:var(--bad); }
+  table { width:100%; border-collapse:collapse; font-size:12px; } th { text-align:left; color:var(--ink2); font-weight:600; border-bottom:1px solid var(--line); padding:5px 4px; }
+  td { padding:5px 4px; border-bottom:1px solid #F0F0F0; } td.n { text-align:right; font-variant-numeric:tabular-nums; }
+  .db { height:8px; border-radius:4px; background:var(--red); display:inline-block; vertical-align:middle; }
+  svg text { font-family:"Segoe UI", Arial, sans-serif; }
+  .legend { font-size:11px; color:var(--ink2); display:flex; gap:12px; } .legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:4px; vertical-align:-1px; }
+  .sample { position:absolute; right:24px; bottom:4px; font-size:10px; color:var(--muted); }
+</style></head><body>
+<div id="pages"></div>
+<script>
+// Sample numbers only (not real data). Each page = one Power BI page at 1280 x 720.
+const C = { red:"#E60000", teal:"#0096AD", orange:"#EB9700", violet:"#9C2AA0", prev:"#BFBFBF", ink:"#262626", ink2:"#595959", line:"#E6E6E6" };
+const fmt = n => n.toLocaleString("en-US");
+const months = ["May","Jun","Jul","Aug","Sep","Oct"];
+// Horizontal bars, one series, value labels at the end; color = one hue
+function hbar(w, h, rows, color, opts = {}) {
+  const lw = opts.lw || 110, max = Math.max(...rows.map(r => r[1])), bh = Math.min(22, (h - 8) / rows.length - 8);
+  let g = "";
+  rows.forEach((r, i) => { const y = 4 + i * (bh + 8), len = (w - lw - 56) * r[1] / max;
+    g += `<text x="${lw - 8}" y="${y + bh / 2 + 4}" text-anchor="end" font-size="12" fill="${C.ink}">${r[0]}</text>` +
+      `<rect x="${lw}" y="${y}" width="${Math.max(len, 2)}" height="${bh}" rx="4" fill="${r[2] || color}"/>` +
+      `<text x="${lw + len + 6}" y="${y + bh / 2 + 4}" font-size="12" fill="${C.ink}" font-weight="600">${opts.fmt ? opts.fmt(r[1]) : fmt(r[1])}</text>`; });
+  return `<svg width="${w}" height="${h}">${g}</svg>`;
+}
+// Line chart: series [{name,color,values}], last point labeled, light gridlines
+function line(w, h, series, opts = {}) {
+  const pl = 22, pr = opts.pr || 70, pt = 12, pb = 22, all = series.flatMap(s => s.values);
+  const lo = opts.min !== undefined ? opts.min : Math.min(...all) * 0.98, hi = opts.max !== undefined ? opts.max : Math.max(...all) * 1.01;
+  const x = i => pl + i * (w - pl - pr) / (months.length - 1), y = v => pt + (h - pt - pb) * (1 - (v - lo) / (hi - lo));
+  let g = "";
+  [0, 0.5, 1].forEach(f => { const yy = pt + (h - pt - pb) * f; g += `<line x1="${pl}" x2="${w - pr}" y1="${yy}" y2="${yy}" stroke="#F0F0F0"/>`; });
+  months.forEach((m, i) => g += `<text x="${x(i)}" y="${h - 6}" text-anchor="middle" font-size="11" fill="${C.ink2}">${m}</text>`);
+  const ends = series.map(s => y(s.values[s.values.length - 1])), ly = ends.slice();
+  ly.map((v, i) => [v, i]).sort((a, b) => a[0] - b[0]).forEach((e, k, arr) => { if (k && e[0] - ly[arr[k - 1][1]] < 15) { ly[e[1]] = ly[arr[k - 1][1]] + 15; } });
+  series.forEach((s, si) => {
+    g += `<polyline fill="none" stroke="${s.color}" stroke-width="2.5" stroke-linejoin="round" points="${s.values.map((v, i) => x(i) + "," + y(v)).join(" ")}"/>`;
+    const L = s.values.length - 1;
+    g += `<circle cx="${x(L)}" cy="${y(s.values[L])}" r="4.5" fill="${s.color}" stroke="#fff" stroke-width="2"/>` +
+      `<text x="${x(L) + 9}" y="${ly[si] + 4}" font-size="12" font-weight="600" fill="${C.ink}">${opts.fmt ? opts.fmt(s.values[L]) : fmt(s.values[L])}${s.name ? " " + s.name : ""}</text>`;
+  });
+  return `<svg width="${w}" height="${h}">${g}</svg>`;
+}
+// Columns per month, stacked segments with a 2px gap
+function cols(w, h, stacks, colors) {
+  const pb = 22, pt = 16, max = Math.max(...stacks.map(s => s.reduce((a, b) => a + b, 0))), bw = (w / stacks.length) * 0.5;
+  let g = "";
+  stacks.forEach((s, i) => { let y = h - pb; const cx = (i + 0.5) * w / stacks.length;
+    s.forEach((v, k) => { const hh = (h - pb - pt) * v / max; if (hh > 0) { g += `<rect x="${cx - bw / 2}" y="${y - hh}" width="${bw}" height="${Math.max(hh - 2, 1)}" rx="3" fill="${colors[k]}"/>`; } y -= hh; });
+    g += `<text x="${cx}" y="${y - 4}" text-anchor="middle" font-size="11" font-weight="600" fill="${C.ink}">${fmt(s.reduce((a, b) => a + b, 0))}</text>` +
+      `<text x="${cx}" y="${h - 6}" text-anchor="middle" font-size="11" fill="${C.ink2}">${months[i]}</text>`; });
+  return `<svg width="${w}" height="${h}">${g}</svg>`;
+}
+// 100% bars: in use vs in stock
+function share(w, h, rows) {
+  const lw = 130, bh = 24; let g = "";
+  rows.forEach((r, i) => { const y = 6 + i * (bh + 18), tot = r[1] + r[2], a = (w - lw - 10) * r[1] / tot;
+    g += `<text x="${lw - 8}" y="${y + 16}" text-anchor="end" font-size="12" fill="${C.ink}">${r[0]}</text>` +
+      `<rect x="${lw}" y="${y}" width="${a - 2}" height="${bh}" rx="4" fill="${C.red}"/><rect x="${lw + a}" y="${y}" width="${w - lw - 10 - a}" height="${bh}" rx="4" fill="${C.prev}"/>` +
+      `<text x="${lw + 8}" y="${y + 16}" font-size="12" font-weight="600" fill="#fff">${(100 * r[1] / tot).toFixed(1)}% in use</text>` +
+      `<text x="${w - 16}" y="${y + 16}" text-anchor="end" font-size="12" fill="${C.ink}">${fmt(r[2])} in stock</text>`; });
+  return `<svg width="${w}" height="${h}">${g}</svg>`;
+}
+function donut(size, parts) {
+  const tot = parts.reduce((a, p) => a + p[1], 0), R = size / 2 - 4, r = R * 0.62, cx = size / 2; let a = -Math.PI / 2, g = "";
+  parts.forEach(p => { if (!p[1]) return; const b = a + 2 * Math.PI * p[1] / tot - 0.02, big = b - a > Math.PI ? 1 : 0, P = (t, rr) => `${cx + rr * Math.cos(t)},${cx + rr * Math.sin(t)}`;
+    g += p[1] === tot ? `<circle cx="${cx}" cy="${cx}" r="${(R + r) / 2}" fill="none" stroke="${p[2]}" stroke-width="${R - r}"/>` :
+      `<path d="M${P(a, R)} A${R},${R} 0 ${big} 1 ${P(b, R)} L${P(b, r)} A${r},${r} 0 ${big} 0 ${P(a, r)}Z" fill="${p[2]}"/>`; a = b + 0.02; });
+  return `<svg width="${size}" height="${size}">${g}</svg>`;
+}
+const head = (title, sub, tab) => `<header><div class="bar"></div><div class="t"><h1>${title}</h1><p>${sub}</p></div>
+  <span class="pill">Month: October 2026 ▾</span><span class="logo">VOIS</span></header>
+  <nav>${["Overview", "New assets & POs", "Scrapped & inactive", "Stock utilization"].map((n, i) => `<span class="${i === tab ? "on" : ""}">${n}</span>`).join("")}</nav>`;
+const kpi = (l, v, s, hero) => `<div class="card kpi${hero ? " hero" : ""}"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
+const pages = [];
+
+// 1 Overview
+pages.push(head("106,815 assets in October, +2,768 vs September", "Spider data integrity · monthly reconciliation of the VCAMS exports", 0) +
+`<main style="grid-template-rows:118px 1fr 104px; grid-template-columns:3fr 2fr">
+  <div class="kpis" style="grid-column:1/3; grid-template-columns:repeat(5,1fr)">
+    ${kpi("Total assets", "106,815", '<span class="up">▲ +2,768</span> vs Sep', true)}
+    ${kpi("New assets", "2,768", "Mouse 2,000 · Notebook 738")}
+    ${kpi("Scrapped / inactive / lost", "688", "295 to validate")}
+    ${kpi("POs matched", "9 / 9", '<span class="up">100%</span> on Spider')}
+    ${kpi("Notebook utilization", "71.3%", "Cover 2.4 months")}
+  </div>
+  <div class="card"><h3>Total assets <small>last 6 months</small></h3>${line(680, 300, [{ color: C.red, values: [101900, 102600, 103200, 103650, 104047, 106815] }])}</div>
+  <div class="card"><h3>Change vs September <small>by value group</small></h3>${hbar(440, 120, [["Low value", 2000], ["High value", 768], ["Other", 0]], C.red, { fmt: v => (v > 0 ? "+" : "") + fmt(v) })}
+    <h3 style="margin-top:14px">Biggest movers <small>by asset type</small></h3>${hbar(440, 120, [["Mouse", 2000], ["Notebook", 731], ["Monitor", 28]], C.teal, { fmt: v => "+" + fmt(v) })}</div>
+  <div class="card" style="grid-column:1/3"><h3>Needs attention</h3><ul class="att" style="display:grid;grid-template-columns:repeat(3,1fr);gap:0 24px">
+    <li><b>295</b> notebooks, monitors and accessories still to validate <span class="chip wa">Open</span></li>
+    <li><b>12</b> removed assets to review <span class="chip wa">Open</span></li>
+    <li><b>0</b> new assets without a PurchaseNo <span class="chip ok">Done</span></li></ul></div>
+</main>`);
+
+// 2 New assets & POs
+pages.push(head("2,768 new assets, all 9 POs matched on Spider", "New assets this month by type and the PO validation result", 1) +
+`<main style="grid-template-rows:118px 1fr; grid-template-columns:2fr 3fr">
+  <div class="kpis" style="grid-column:1/3; grid-template-columns:repeat(4,1fr)">
+    ${kpi("New assets", "2,768", '<span class="up">▲ +1,912</span> vs Sep', true)}${kpi("POs this month", "9", "All with validation")}
+    ${kpi("POs matched", "9 / 9", '<span class="up">100%</span>')}${kpi("New assets without PO", "0", "Nothing to chase")}
+  </div>
+  <div style="display:grid; grid-template-rows:1fr 1fr; gap:12px">
+    <div class="card"><h3>New assets by type</h3>${hbar(440, 120, [["Mouse", 2000], ["Notebook", 738], ["Monitor", 30]], C.red)}</div>
+    <div class="card"><h3>New assets per month</h3>${cols(440, 130, [[420], [610], [380], [905], [856], [2768]], [C.red])}</div>
+  </div>
+  <div class="card"><h3>PO validation <small>quantity on the PO vs assets on Spider</small></h3><table>
+    <tr><th>PO</th><th>Main model</th><th class="n">On PO</th><th class="n">On Spider</th><th>Result</th></tr>
+    ${[["1600513572", "Mouse", 2000, 2000], ["1600511904", "Dell Pro 14 Plus", 656, 656], ["1600512210", "Dell Pro 14 Plus", 52, 52], ["1600512877", "Monitor 24\"", 30, 30],
+       ["1600510345", "Dell Latitude", 15, 15], ["1600512001", "Dell Latitude", 8, 8], ["1600512460", "Dell Pro 14", 4, 4], ["1600512501", "Dell Pro 14", 2, 2], ["1600512999", "Dell Pro 14", 1, 1]]
+      .map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td class="n">${fmt(r[2])}</td><td class="n">${fmt(r[3])}</td><td><span class="chip ok">✓ Matched</span></td></tr>`).join("")}
+  </table></div>
+</main>`);
+
+// 3 Scrapped & inactive
+pages.push(head("688 assets scrapped, inactive or lost; validation not started", "Status changes this month, why they happened, and the team's validation", 2) +
+`<main style="grid-template-rows:118px 1fr 1fr; grid-template-columns:1fr 1fr 1fr">
+  <div class="kpis" style="grid-column:1/4; grid-template-columns:repeat(4,1fr)">
+    ${kpi("Scrapped", "687", '<span class="dn">▲ +112</span> vs Sep', true)}${kpi("Inactive", "0", "No change")}
+    ${kpi("Lost / stolen", "1", "Listed in the email")}${kpi("Validated", "0 / 295", '<span class="dn">0%</span> done')}
+  </div>
+  <div class="card"><h3>Scrapped by asset type</h3>${hbar(360, 186, [["Notebook", 210], ["Headset", 160], ["Mouse", 118], ["Keyboard", 75], ["Monitor", 61], ["Zubehör-Client", 24], ["Other", 39]], C.red, { lw: 104 })}</div>
+  <div class="card"><h3>Main reasons <small>from the Spider comments</small></h3>${hbar(360, 170, [["Returned / replaced", 319], ["Incident ticket", 313], ["Write-off memo", 32], ["End of life", 14], ["No comment", 10]], C.teal, { lw: 128 })}</div>
+  <div class="card" style="grid-row:2/4;grid-column:3"><h3>Validation progress <small>notebooks, monitors, accessories</small></h3>
+    <div style="display:flex;justify-content:center;margin-top:6px">${donut(170, [["Validated", 0, "#2E7D32"], ["Under investigation", 0, "#B26B00"], ["Not validated", 0, "#B00020"], ["Not checked yet", 295, "#BFBFBF"]])}</div>
+    <ul class="att" style="margin-top:12px"><li><b>0</b> Validated <span class="chip ok">✓</span></li><li><b>0</b> Under investigation <span class="chip wa">…</span></li>
+    <li><b>0</b> Not validated <span class="chip ba">!</span></li><li><b>295</b> Not checked yet</li></ul></div>
+  <div class="card" style="grid-column:1/3;grid-row:3"><h3>Per month</h3><div class="legend"><span><i style="background:${C.red}"></i>Scrapped</span><span><i style="background:${C.teal}"></i>Inactive</span><span><i style="background:${C.violet}"></i>Lost / stolen</span></div>
+    ${cols(740, 118, [[402, 20, 2], [455, 12, 1], [390, 30, 0], [520, 8, 3], [575, 5, 1], [687, 0, 1]], [C.red, C.teal, C.violet])}</div>
+</main>`);
+
+// 4 Stock
+pages.push(head("Notebook utilization 71.3%, headsets 67.2%", "Notebooks and headsets: in use vs in stock, months of cover, and the trend", 3) +
+`<main style="grid-template-rows:118px 1fr 1fr; grid-template-columns:1fr 1fr">
+  <div class="kpis" style="grid-column:1/3; grid-template-columns:repeat(4,1fr)">
+    ${kpi("Notebooks", "71.3%", "in use · cover 2.4 months", true)}${kpi("Wired headsets", "70.3%", "in use · cover 3.1 months")}
+    ${kpi("Wireless headsets", "65.1%", "in use · cover 4.0 months")}${kpi("Notebooks in stock", "3,755", "+ 412 inactive with users")}
+  </div>
+  <div class="card"><h3>In use vs in stock</h3><div class="legend"><span><i style="background:${C.red}"></i>In use</span><span><i style="background:${C.prev}"></i>In stock</span></div>
+    ${share(560, 140, [["Notebooks", 9330, 3755], ["Wired headsets", 4210, 1779], ["Wireless headsets", 1820, 976]])}</div>
+  <div class="card"><h3>Utilization trend</h3><div class="legend"><span><i style="background:${C.red}"></i>Notebooks</span><span><i style="background:${C.teal}"></i>Wired</span><span><i style="background:${C.orange}"></i>Wireless</span></div>
+    ${line(560, 150, [{ name: "", color: C.red, values: [.68, .69, .70, .705, .71, .713] }, { name: "", color: C.teal, values: [.66, .67, .68, .69, .70, .703] },
+      { name: "", color: C.orange, values: [.6, .61, .63, .64, .645, .651] }], { min: .55, max: .75, pr: 60, fmt: v => (100 * v).toFixed(1) + "%" })}</div>
+  <div class="card" style="grid-column:1/3"><h3>Notebooks by model <small>most stock first</small></h3><table>
+    <tr><th>Model</th><th class="n">In use</th><th class="n">In stock</th><th>Utilization</th><th class="n">Deployed from stock (avg / month)</th><th class="n">Months of cover</th></tr>
+    ${[["Dell Pro 14 Plus", 1200, 1650, 140], ["Dell Latitude 5450", 3100, 980, 520], ["Dell Latitude 5440", 2900, 610, 410], ["HP EliteBook 840", 1400, 300, 160]]
+      .map(r => { const u = r[1] / (r[1] + r[2]); return `<tr><td>${r[0]}</td><td class="n">${fmt(r[1])}</td><td class="n">${fmt(r[2])}</td><td><span class="db" style="width:${160 * u}px"></span> ${(100 * u).toFixed(1)}%</td><td class="n">${r[3]}</td><td class="n">${(r[2] / r[3]).toFixed(1)}</td></tr>`; }).join("")}
+  </table></div>
+</main>`);
+document.getElementById("pages").innerHTML = pages.map((p, i) => `<div class="page" id="p${i + 1}">${p}<div class="sample">Mockup · sample numbers</div></div>`).join("");
+</script></body></html>

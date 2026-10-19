@@ -1,0 +1,116 @@
+// =====================================================================================================================
+// Spider Data Integrity - Power BI model
+// 1) Months table (Modeling > New table), then a relationship Months[Month Date] 1 -> * Facts[Month Date].
+// 2) The measures below (Modeling > New measure, one at a time; put them in an empty table named "_Measures").
+// Every measure shows the selected month (or the latest month when nothing is selected). On a chart with Month on the
+// axis, each point shows its own month - so the same measures work for cards and for trends.
+// =====================================================================================================================
+
+Months =
+ADDCOLUMNS (
+    DISTINCT ( Facts[Month Date] ),
+    "Month", FORMAT ( [Month Date], "mmm yyyy" ),
+    "Month Short", FORMAT ( [Month Date], "mmm" ),
+    "Month Sort", YEAR ( [Month Date] ) * 100 + MONTH ( [Month Date] )
+)
+// After creating it: select Months[Month] > Column tools > Sort by column > Month Sort (same for Month Short).
+
+// ---------- base ----------
+Selected Month = MAX ( Months[Month Date] )
+
+Value =
+VAR m = [Selected Month]
+RETURN CALCULATE ( SUM ( Facts[Value] ), Months[Month Date] = m )
+
+Value Previous Month =
+VAR m = EDATE ( [Selected Month], -1 )
+RETURN CALCULATE ( SUM ( Facts[Value] ), Months[Month Date] = m )
+
+// ---------- overview ----------
+Total Assets = CALCULATE ( [Value], Facts[Section] = "Overview", Facts[Metric] = "Total assets" )
+Total Assets Last Month = CALCULATE ( [Value], Facts[Section] = "Overview", Facts[Metric] = "Total assets previous month" )
+Net Change = [Total Assets] - [Total Assets Last Month]
+New Assets = CALCULATE ( [Value], Facts[Section] = "Overview", Facts[Metric] = "New assets" )
+Removed Assets = CALCULATE ( [Value], Facts[Section] = "Overview", Facts[Metric] = "Removed assets" )
+Serial Changes = CALCULATE ( [Value], Facts[Section] = "Overview", Facts[Metric] = "Serial number changes" )
+New Without PO = CALCULATE ( [Value], Facts[Section] = "Overview", Facts[Metric] = "New assets without PO" )
+
+// ---------- status changes ----------
+Scrapped = CALCULATE ( [Value], Facts[Section] = "Overview", Facts[Metric] = "Scrapped" )
+Inactive = CALCULATE ( [Value], Facts[Section] = "Overview", Facts[Metric] = "Inactive" )
+Lost Stolen = CALCULATE ( [Value], Facts[Section] = "Overview", Facts[Metric] IN { "Lost", "Stolen" } )
+Status Changes = [Scrapped] + [Inactive] + [Lost Stolen]
+Scrapped Last Month = CALCULATE ( [Value Previous Month], Facts[Section] = "Overview", Facts[Metric] = "Scrapped" )
+// Charts: Category = status, Item = asset type / reason
+Status Changes By Type = CALCULATE ( [Value], Facts[Section] = "Status changes" )
+Change Reasons = CALCULATE ( [Value], Facts[Section] = "Change reasons" )
+
+// ---------- validation ----------
+To Validate = CALCULATE ( [Value], Facts[Section] = "Overview", Facts[Metric] = "To validate" )
+Validated = CALCULATE ( [Value], Facts[Section] = "Overview", Facts[Metric] = "Validated" )
+Under Investigation = CALCULATE ( [Value], Facts[Section] = "Overview", Facts[Metric] = "Under investigation" )
+Not Validated = CALCULATE ( [Value], Facts[Section] = "Overview", Facts[Metric] = "Not validated" )
+Not Checked Yet = CALCULATE ( [Value], Facts[Section] = "Overview", Facts[Metric] = "Not checked yet" )
+Validated % = DIVIDE ( [Validated], [To Validate] )
+Validation Label = FORMAT ( [Validated], "#,0" ) & " / " & FORMAT ( [To Validate], "#,0" )
+
+// ---------- POs ----------
+POs = CALCULATE ( [Value], Facts[Section] = "Overview", Facts[Metric] = "POs" )
+POs Matched = CALCULATE ( [Value], Facts[Section] = "Overview", Facts[Metric] = "POs matched" )
+PO Validations Open = CALCULATE ( [Value], Facts[Section] = "Overview", Facts[Metric] = "PO validations open" )
+PO Match % = DIVIDE ( [POs Matched], [POs] )
+PO Label = FORMAT ( [POs Matched], "#,0" ) & " / " & FORMAT ( [POs], "#,0" )
+// PO table: Item = PO number, Category = result
+PO Assets On Spider = CALCULATE ( [Value], Facts[Section] = "POs", Facts[Metric] = "Assets on Spider" )
+PO Quantity = CALCULATE ( [Value], Facts[Section] = "POs", Facts[Metric] = "Quantity on PO" )
+
+// ---------- assets by type / new assets ----------
+Assets = CALCULATE ( [Value], Facts[Section] = "Assets by type", Facts[Metric] = "Assets" )
+Assets Last Month = CALCULATE ( [Value], Facts[Section] = "Assets by type", Facts[Metric] = "Assets previous month" )
+Assets Change = [Assets] - [Assets Last Month]
+New Assets By Type = CALCULATE ( [Value], Facts[Section] = "New assets" )
+
+// ---------- stock (use Facts[Category] = Notebooks / Headsets (all) / Wired headsets / Wireless headsets) ----------
+In Use = CALCULATE ( [Value], Facts[Section] = "Stock", Facts[Metric] = "In use" )
+In Stock = CALCULATE ( [Value], Facts[Section] = "Stock", Facts[Metric] = "In stock" )
+Inactive With User = CALCULATE ( [Value], Facts[Section] = "Stock", Facts[Metric] IN { "Authorised inactive", "Disabled" } )
+Deployed From Stock = CALCULATE ( [Value], Facts[Section] = "Stock", Facts[Metric] = "Deployed from stock" )
+New Straight To Use = CALCULATE ( [Value], Facts[Section] = "Stock", Facts[Metric] = "New straight to use" )
+Avg Deployed From Stock = CALCULATE ( [Value], Facts[Section] = "Stock", Facts[Metric] = "Avg deployed from stock" )
+Utilization = DIVIDE ( [In Use], [In Use] + [In Stock] )
+Months Of Cover = DIVIDE ( [In Stock], [Avg Deployed From Stock] )
+// Per model (Facts[Category] = "Notebooks" / "Wired headsets" / ..., Facts[Item] = model)
+Model In Use = CALCULATE ( [Value], Facts[Section] = "Stock by model", Facts[Metric] = "In use" )
+Model In Stock = CALCULATE ( [Value], Facts[Section] = "Stock by model", Facts[Metric] = "In stock" )
+Model Utilization = DIVIDE ( [Model In Use], [Model In Use] + [Model In Stock] )
+Model Deployed From Stock = CALCULATE ( [Value], Facts[Section] = "Stock by model", Facts[Metric] = "Deployed from stock" )
+
+// Fixed categories for the KPI cards
+Notebook Utilization = CALCULATE ( [Utilization], Facts[Category] = "Notebooks" )
+Headset Utilization = CALCULATE ( [Utilization], Facts[Category] = "Headsets (all)" )
+Wired Utilization = CALCULATE ( [Utilization], Facts[Category] = "Wired headsets" )
+Wireless Utilization = CALCULATE ( [Utilization], Facts[Category] = "Wireless headsets" )
+Notebook Cover = CALCULATE ( [Months Of Cover], Facts[Category] = "Notebooks" )
+Notebooks In Stock = CALCULATE ( [In Stock], Facts[Category] = "Notebooks" )
+
+// ---------- page titles: the message of each page (use in a Card with the category label off) ----------
+Title Overview =
+FORMAT ( [Total Assets], "#,0" ) & " assets in " & FORMAT ( [Selected Month], "mmmm" ) & ", "
+    & FORMAT ( [Net Change], "+#,0;-#,0;0" ) & " vs " & FORMAT ( EDATE ( [Selected Month], -1 ), "mmmm" )
+
+Title New Assets =
+FORMAT ( [New Assets], "#,0" ) & " new assets, " & FORMAT ( [POs Matched], "#,0" ) & " of " & FORMAT ( [POs], "#,0" ) & " POs matched"
+
+Title Status =
+FORMAT ( [Status Changes], "#,0" ) & " assets scrapped, inactive or lost; "
+    & FORMAT ( [Validated], "#,0" ) & " of " & FORMAT ( [To Validate], "#,0" ) & " validated"
+
+Title Stock =
+"Notebook utilization " & FORMAT ( [Notebook Utilization], "0.0%" ) & ", headsets " & FORMAT ( [Headset Utilization], "0.0%" )
+
+// ---------- small lines under the KPI numbers ----------
+Net Change Label = FORMAT ( [Net Change], "▲ +#,0;▼ -#,0;0" ) & " vs last month"
+Cover Label = "Cover " & FORMAT ( [Notebook Cover], "0.0" ) & " months"
+Needs Attention 1 = FORMAT ( [Not Checked Yet] + [Under Investigation] + [Not Validated], "#,0" ) & " devices still to validate"
+Needs Attention 2 = FORMAT ( [Removed Assets], "#,0" ) & " removed assets to review"
+Needs Attention 3 = FORMAT ( [PO Validations Open], "#,0" ) & " PO validations open"

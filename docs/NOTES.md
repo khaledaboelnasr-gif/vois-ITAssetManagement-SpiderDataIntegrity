@@ -106,6 +106,11 @@ The spec is the "Monthly Asset Reconciliation Copilot Agent" instructions, writt
   to 2 earlier months from the Stock tab's table 7 (Deployment history), which each run updates and keeps; the user can
   type earlier months (YYYY-MM). The export has no assignment date, so history is the only source for the average.
   v17: a new workbook can carry it as a plain tab named "Deployment History" (rows pasted with the header).
+- **Direction (user decision, 2026-10-19):** Power BI for presenting the numbers (report + live slides), a simple
+  Power Automate flow for the monthly run; the Copilot agent becomes optional (questions only). The script writes a
+  **BI Data** tab (`tblBIFacts`, long format, counts only, no PII); Power BI combines it from one result file per month
+  in a SharePoint folder (`docs/POWERBI_GUIDE.md`, `powerbi/`). Palette: VOIS red + teal / orange / violet (validated
+  for colour-blind separation), grey for last month / in stock, green / amber / dark red for status only.
 - **PowerPoint (2026-10-18, v14):** Copilot did not give a presentable deck from numbers alone, so the work is split:
   the **PPT Slides** tab draws the charts as real Excel charts in VOIS colours (one block per slide: title, 4 KPI cards,
   bullets, chart data, charts), and the Copilot prompt builds a title slide + 4 slides (Overview; New assets and POs;

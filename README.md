@@ -41,6 +41,8 @@ It follows the same pattern as [vois-ticket-review](https://github.com/khaledabo
 | `reference_extract_officescript.ts` | Turns a Users (HR / Entra ID) or Devices (Intune / SCCM) workbook into compact JSON for the engine. |
 | `docs/NOTES.md` | Constraints, decisions, how the monthly-process spec maps to the build, open questions, next steps. **Read this first.** |
 | `docs/FLOW_GUIDE.md` | SharePoint layout and the Power Automate agent flow, step by step. |
+| `docs/POWERBI_GUIDE.md` | **The current plan:** SharePoint folders, the Power BI report (4 pages) and the monthly flow, step by step. |
+| `powerbi/` | Power BI files: `Facts_query.pq` (Power Query), `Measures.dax`, `VOIS_Executive_theme.json`, `mockup/` (design, sample numbers). |
 | `docs/AGENT_GUIDE.md` | Copilot Studio agent: instructions, topic, and how it handles PO data. |
 | `docs/SCRIPT_OVERVIEW.txt` | Plain-language overview of the tabs and checks, for stakeholders. |
 | `test/gen_synthetic.py` | Generates fake previous and current exports, a PO tab, users and Intune data (no real data). |

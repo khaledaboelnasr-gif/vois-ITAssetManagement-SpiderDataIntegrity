@@ -231,7 +231,7 @@ const SETTINGS: Record<string, number> = {
 // (Kind 'HostnamePattern', Value = market, MapsTo = pattern), e.g. ^EG[LD]\d{6}$
 const HOSTNAME_PATTERN: string = "";
 
-const SCRIPT_VERSION = "2026.10.18.17";
+const SCRIPT_VERSION = "2026.10.19.1";
 const MAPPINGS_SHEET = "Mappings", PHYSICAL_SHEET = "Physical Check";
 const PHYSICAL_COLS = ["Found? (Y/N)", "Right location? (Y/N)", "Right user? (Y/N)", "Comment"];
 
@@ -2437,11 +2437,11 @@ const BRAND = "#E60000", DARK = "#333333", GREY = "#595959";
 // Stock & Utilisation. false = the full audit (integrity score, exceptions, leavers, lifecycle, ...).
 const REPORT_ONLY = true;
 const REPORT_SHEETS = ["Monthly Email", "PPT Slides", "Pivot & Summary", "New Assets", "Removed Assets", "Serial Number Changes",
-  "Scrap & Inactive Assets", "POs Validated", "Stock & Utilisation", "Glossary", "Mappings"];
+  "Scrap & Inactive Assets", "POs Validated", "Stock & Utilisation", "Glossary", "Mappings", "BI Data"];
 const SHEETS = ["Start Here", "Monthly Email", "PPT Slides", "Executive Summary", "Monthly KPIs", "Pivot & Summary", "New Assets", "Removed Assets",
   "Serial Number Changes", "Scrap & Inactive Assets", "POs Validated", "Quality Checks", "Integrity Score", "Exceptions", "Duplicates",
   "Users & Leavers", "Reconciliation", "Stock & Utilisation", "Lifecycle", "Since Last Audit", "Inventory Overview",
-  "Physical Check", "All Assets", "Glossary"];
+  "Physical Check", "All Assets", "Glossary", "BI Data"];
 
 function newSheet(wb: ExcelScript.Workbook, name: string, title: string, subtitle: string): ExcelScript.Worksheet {
   const old = wb.getWorksheet(name);
@@ -2867,6 +2867,13 @@ function buildGuideSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
     ["Copilot in PowerPoint prompt", "A title slide and 4 slides: each with its message as the title, 4 KPI cards, short bullets and an empty [Chart] box.",
       "Open a new presentation from the VOIS template, open Copilot, paste the rows. Then paste the charts from PPT Slides into the [Chart] boxes."]]);
 
+  tab(BI_SHEET, "This month's numbers for Power BI", [
+    ["tblBIFacts", "One row per number: Month, Month Date, Section, Category, Item, Metric, Value.", "Sections: Overview, Assets by type, " +
+      "New assets, Status changes, Change reasons, POs, Stock, Stock by model. Counts only - Power BI works out utilization, cover and % validated. " +
+      "No names, emails or asset numbers."],
+    ["How Power BI uses it", "Each month's result file is saved in one SharePoint folder; Power BI combines tblBIFacts from every file.",
+      "Keep one result file per month (the flow overwrites the month's file), so a month is never counted twice."]]);
+
   tab(PPT_SHEET, "The 4 slides with their charts, ready to paste into PowerPoint", [
     ["How to build the deck", "The 4 steps: Copilot prompt, paste the charts, fix a slide with Copilot, check the numbers.",
       "Copilot lays out slides and text well but does not draw reliable charts from numbers, so the charts come from Excel."],
@@ -3174,9 +3181,10 @@ function buildWorkbook(wb: ExcelScript.Workbook, ctx: Ctx): void {
     buildSummarySheet(wb, ctx, notes);
     if (notes.length) { ctx.runInfo.push(["PivotTables and formulas", notes.join("; ")]); }
     buildEmailSheet(wb, ctx);
+    buildBiSheet(wb, ctx);
   } else {
     buildStockSheet(wb, ctx);
-    reconSheets.concat([EMAIL_SHEET, PPT_SHEET]).forEach(n => { const w = wb.getWorksheet(n); if (w) { w.delete(); } });
+    reconSheets.concat([EMAIL_SHEET, PPT_SHEET, BI_SHEET]).forEach(n => { const w = wb.getWorksheet(n); if (w) { w.delete(); } });
     // The user's PO data is kept on its sheet even without a previous export
     if (ctx.po.rows.length) {
       const ws0 = newSheet(wb, PO_SHEET, "POs Validated", "Supplied by the user. PO reconciliation needs the previous export (new assets).");
@@ -3593,6 +3601,65 @@ function buildEmailSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
     ` Step 2: paste the charts from the ${PPT_SHEET} tab into the [Chart] boxes.`, rep.ppt, []);
   link(ws, r - 1, 1, `Open ${PPT_SHEET} (charts to paste) ›`, PPT_SHEET);
   buildPptSheet(wb, ctx, rep);
+}
+// BI Data: this month's numbers as one long table for Power BI (no names, emails or asset numbers). Every monthly
+// result file has the same table, so Power BI combines the files of a SharePoint folder into one history. Counts only:
+// rates (utilization, cover, % validated) are worked out in Power BI from the counts.
+const BI_SHEET = "BI Data", BI_TABLE = "tblBIFacts";
+function buildBiSheet(wb: ExcelScript.Workbook, ctx: Ctx): void {
+  progress("Writing BI Data");
+  const rc = ctx.recon, month = rc.curPeriod, maps = ctx.maps, rows: Cell[][] = [];
+  const md = month.match(/^(\d{4})-(\d{2})$/), monthDate = md ? dateSerial(new Date(Date.UTC(+md[1], +md[2] - 1, 1))) : "";
+  const put = (section: string, category: string, item: string, metric: string, value: number) => {
+    if (value || section === "Overview" || section === "Stock") { rows.push([month, monthDate, section, category, item, metric, value]); }
+  };
+  const count = (list: string[]) => countBy(list.map(x => x || "(blank)"));
+  const ended = (k: string) => rc.changes.filter(c => compactKey(c.cur.status) === k);
+  const statuses: [string, StatusChange[]][] = [["Scrapped", ended("scrapped")], ["Inactive", ended("inactive")], ["Lost", ended("lost")], ["Stolen", ended("stolen")]];
+  const toCheck = rc.operational.filter(c => needsValidation(c.cur));
+  const vOf = (c: StatusChange) => (rc.validation.get(idKey(c.cur.assetId)) || ["", ""])[0];
+  const po = poReconRows(ctx);
+  // --- Overview: the headline numbers
+  const ov: [string, number][] = [["Total assets", rc.curRows], ["Total assets previous month", rc.prevRows], ["New assets", rc.newAssets.length],
+    ["Removed assets", rc.removed.length], ["Serial number changes", rc.serialChanges.length], ["New assets without PO", rc.newAssets.filter(a => !a.po).length],
+    ["POs", po.length], ["POs matched", po.filter(x => x[7] === PO_RESULTS.matched).length], ["PO validations open", openValidations(ctx).length],
+    ["To validate", toCheck.length], ["Not checked yet", toCheck.filter(c => !vOf(c)).length]];
+  statuses.forEach(g => ov.push([g[0], g[1].length]));
+  VALIDATION_RESULTS.forEach(v => ov.push([v, toCheck.filter(c => vOf(c) === v).length]));
+  ov.forEach(x => put("Overview", "All", "", x[0], x[1]));
+  // --- Assets by type (this month and last month), new assets by type, status changes by type and reason
+  VALUE_GROUPS.forEach(g => typeRows(rc, g, maps).forEach(t => { put("Assets by type", g, t[0], "Assets", t[2]); put("Assets by type", g, t[0], "Assets previous month", t[1]); }));
+  const nt = count(rc.newAssets.map(a => a.assetClass));
+  keysByCount(nt).forEach(t => put("New assets", typeOf(t, "", maps).group, t, "New assets", nt.get(t) || 0));
+  statuses.forEach(g => {
+    const bt = count(g[1].map(c => c.cur.assetClass)), br = count(g[1].map(c => changeReason(c.cur, maps)));
+    keysByCount(bt).forEach(t => put("Status changes", g[0], t, "Assets", bt.get(t) || 0));
+    keysByCount(br).forEach(t => put("Change reasons", g[0], t, "Assets", br.get(t) || 0));
+  });
+  // --- POs: per PO and result
+  po.forEach(x => { put("POs", String(x[7]), String(x[0] || "(blank)"), "Assets on Spider", Number(x[2]) || 0);
+    put("POs", String(x[7]), String(x[0] || "(blank)"), "Quantity on PO", Number(x[3]) || 0); });
+  // --- Stock: per category, and per model
+  stockSummary(ctx).forEach(x => {
+    const c = x.label.trim();
+    ([["In use", x.use], ["In stock", x.stock], ["Authorised inactive", x.authInactive], ["Disabled", x.disabled],
+      ["Deployed from stock", x.fromStock], ["New straight to use", x.newDirect], ["Avg deployed from stock", x.avg]] as [string, number][])
+      .forEach(m => put("Stock", c, "", m[0], m[1]));
+  });
+  const pool = ctx.assets.filter(a => stockGroup(a));
+  put("Stock", "Not counted", "", "Assets", pool.filter(a => stockBucket(a, maps) === STOCK_OUT).length);
+  Array.from(groupBy(pool.filter(a => stockBucket(a, maps) !== STOCK_OUT), a => [stockGroup(a) === STOCK_HEADSETS ?
+    `${headsetConnection(a, maps)} headsets` : stockGroup(a), a.model || "(no model)"].join("\u0001")).entries()).forEach(e => {
+    const k = e[0].split("\u0001"), b = (x: string) => e[1].filter(a => stockBucket(a, maps) === x);
+    put("Stock by model", k[0], k[1], "In use", b(STOCK_USE).length);
+    put("Stock by model", k[0], k[1], "In stock", b(STOCK_STOCK).length);
+    put("Stock by model", k[0], k[1], "Deployed from stock", e[1].filter(a => a.deployedFrom === "stock").length);
+  });
+  const ws = newSheet(wb, BI_SHEET, "BI Data - " + monthName(month), "For Power BI: this month's counts in one table (no names or " +
+    "asset numbers). Do not edit; the next run rebuilds it. See Glossary > BI Data.");
+  ws.setTabColor("#7F7F7F");
+  addTable(ws, 3, BI_TABLE, ["Month", "Month Date", "Section", "Category", "Item", "Metric", "Value"], rows,
+    { widths: [80, 100, 130, 170, 260, 190, 90], text: [0, 4], date: [1], num: [6] });
 }
 // PPT Slides: one block per slide - its title, KPI cards, bullets and the chart(s) as real Excel charts in VOIS colours,
 // with the numbers under them. The charts are pasted into PowerPoint (Copilot does not draw charts reliably from a prompt).

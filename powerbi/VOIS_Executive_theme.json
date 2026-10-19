@@ -1,0 +1,110 @@
+{
+  "name": "VOIS Executive",
+  "dataColors": ["#E60000", "#0096AD", "#EB9700", "#9C2AA0", "#BFBFBF", "#595959"],
+  "foreground": "#262626",
+  "foregroundNeutralSecondary": "#595959",
+  "foregroundNeutralTertiary": "#8C8C8C",
+  "background": "#FFFFFF",
+  "backgroundLight": "#F4F4F4",
+  "backgroundNeutral": "#E6E6E6",
+  "tableAccent": "#E60000",
+  "good": "#2E7D32",
+  "neutral": "#B26B00",
+  "bad": "#B00020",
+  "maximum": "#E60000",
+  "center": "#F4B6B6",
+  "minimum": "#FFFFFF",
+  "textClasses": {
+    "callout": { "fontSize": 28, "fontFace": "Segoe UI Semibold", "color": "#262626" },
+    "title": { "fontSize": 13, "fontFace": "Segoe UI Semibold", "color": "#262626" },
+    "header": { "fontSize": 12, "fontFace": "Segoe UI Semibold", "color": "#262626" },
+    "label": { "fontSize": 10, "fontFace": "Segoe UI", "color": "#595959" }
+  },
+  "visualStyles": {
+    "*": {
+      "*": {
+        "background": [{ "show": true, "color": { "solid": { "color": "#FFFFFF" } }, "transparency": 0 }],
+        "border": [{ "show": true, "color": { "solid": { "color": "#E6E6E6" } }, "radius": 8 }],
+        "dropShadow": [{ "show": false }],
+        "title": [{ "show": true, "fontColor": { "solid": { "color": "#262626" } }, "fontSize": 13, "fontFamily": "Segoe UI Semibold", "alignment": "left" }],
+        "padding": [{ "top": 12, "bottom": 12, "left": 14, "right": 14 }]
+      }
+    },
+    "page": {
+      "*": {
+        "background": [{ "color": { "solid": { "color": "#F4F4F4" } }, "transparency": 0 }],
+        "outspace": [{ "color": { "solid": { "color": "#F4F4F4" } }, "transparency": 0 }]
+      }
+    },
+    "card": {
+      "*": {
+        "labels": [{ "color": { "solid": { "color": "#262626" } }, "fontSize": 28, "fontFamily": "Segoe UI Semibold" }],
+        "categoryLabels": [{ "show": true, "color": { "solid": { "color": "#595959" } }, "fontSize": 11 }]
+      }
+    },
+    "clusteredBarChart": {
+      "*": {
+        "labels": [{ "show": true, "color": { "solid": { "color": "#262626" } }, "fontSize": 11 }],
+        "valueAxis": [{ "show": false, "gridlineShow": false }],
+        "categoryAxis": [{ "showAxisTitle": false, "fontSize": 11 }],
+        "legend": [{ "show": false }]
+      }
+    },
+    "clusteredColumnChart": {
+      "*": {
+        "labels": [{ "show": true, "color": { "solid": { "color": "#262626" } }, "fontSize": 11 }],
+        "valueAxis": [{ "show": false, "gridlineShow": false }],
+        "categoryAxis": [{ "showAxisTitle": false, "fontSize": 11 }]
+      }
+    },
+    "hundredPercentStackedBarChart": {
+      "*": {
+        "labels": [{ "show": true, "fontSize": 11 }],
+        "valueAxis": [{ "show": false, "gridlineShow": false }],
+        "categoryAxis": [{ "showAxisTitle": false, "fontSize": 11 }],
+        "legend": [{ "show": true, "position": "Top" }]
+      }
+    },
+    "stackedColumnChart": {
+      "*": {
+        "labels": [{ "show": false }],
+        "valueAxis": [{ "show": false, "gridlineShow": false }],
+        "categoryAxis": [{ "showAxisTitle": false, "fontSize": 11 }],
+        "legend": [{ "show": true, "position": "Top" }]
+      }
+    },
+    "lineChart": {
+      "*": {
+        "lineStyles": [{ "strokeWidth": 3 }],
+        "valueAxis": [{ "show": false, "gridlineShow": true, "gridlineColor": { "solid": { "color": "#F0F0F0" } } }],
+        "categoryAxis": [{ "showAxisTitle": false, "fontSize": 11 }],
+        "legend": [{ "show": true, "position": "Top" }]
+      }
+    },
+    "donutChart": {
+      "*": {
+        "labels": [{ "show": true, "labelStyle": "Category, data value" }],
+        "legend": [{ "show": false }]
+      }
+    },
+    "tableEx": {
+      "*": {
+        "grid": [{ "gridVertical": false, "gridHorizontal": true, "gridHorizontalColor": { "solid": { "color": "#F0F0F0" } }, "rowPadding": 4 }],
+        "columnHeaders": [{ "fontColor": { "solid": { "color": "#595959" } }, "backColor": { "solid": { "color": "#FFFFFF" } }, "fontFamily": "Segoe UI Semibold", "fontSize": 11 }],
+        "values": [{ "fontSize": 11, "backColorPrimary": { "solid": { "color": "#FFFFFF" } }, "backColorSecondary": { "solid": { "color": "#FFFFFF" } } }]
+      }
+    },
+    "slicer": {
+      "*": {
+        "border": [{ "show": true, "color": { "solid": { "color": "#E6E6E6" } }, "radius": 16 }],
+        "header": [{ "show": false }]
+      }
+    },
+    "textbox": {
+      "*": {
+        "background": [{ "show": false }],
+        "border": [{ "show": false }]
+      }
+    }
+  }
+}

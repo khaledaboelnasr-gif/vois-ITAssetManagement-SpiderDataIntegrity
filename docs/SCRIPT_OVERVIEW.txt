@@ -1,5 +1,5 @@
 VOIS ASSET AUDIT SCRIPT - OVERVIEW
-Script version 2026.10.18.17
+Script version 2026.10.19.1
 ====================================================================
 
 Use this to review the script and ask for changes. To ask for a change,
@@ -60,7 +60,9 @@ yellow = still to fill, a to-do row for each PO on Spider with no validation yet
 STOCK & UTILISATION: 1 Summary (Notebooks; Headsets, split into type Headset and headset models under
 Zubehör-Client), 2 Notebooks by model, 3 Headsets by model. Months of cover = in stock / average deployed
 from stock per month (this month + up to 2 earlier months from table 7, Deployment history, kept between runs);
-new assets put straight into use are shown separately and are not in the cover. The other tabs below are made only when
+new assets put straight into use are shown separately and are not in the cover.
+BI DATA: this month's counts as one table (tblBIFacts: Month, Month Date, Section, Category, Item, Metric, Value) for
+Power BI; no names, emails or asset numbers. See docs/POWERBI_GUIDE.md. The other tabs below are made only when
 REPORT_ONLY is set to false in the script.
 
 1) START HERE
